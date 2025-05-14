@@ -1,0 +1,2 @@
+we get an image.png as puzzle input, it has 1 ETH locked in 0xFF2142E98E09b5344994F9bEB9C56C95506B9F17.
+we should try steganographic approaches to spit out every potential angle to find the private key to this address
