@@ -1,0 +1,29 @@
+@echo off
+:: Crypto Hunter launcher script for Windows
+
+:: Directory of this script
+set "SCRIPT_DIR=%~dp0"
+
+:: Default virtual environment path
+set "VENV_PATH=%SCRIPT_DIR%venv"
+
+:: Check if the virtual environment exists
+if not exist "%VENV_PATH%" (
+    echo Virtual environment not found at %VENV_PATH%
+    echo Running installation script...
+    python "%SCRIPT_DIR%install.py"
+    
+    if errorlevel 1 (
+        echo Installation failed. Please run install.py manually.
+        exit /b 1
+    )
+)
+
+:: Activate virtual environment and run Crypto Hunter
+call "%VENV_PATH%\Scripts\activate.bat"
+
+:: Run Crypto Hunter with all arguments passed to this script
+python "%SCRIPT_DIR%main.py" %*
+
+:: Deactivate virtual environment
+call "%VENV_PATH%\Scripts\deactivate.bat"

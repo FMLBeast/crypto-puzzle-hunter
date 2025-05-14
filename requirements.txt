@@ -1,0 +1,34 @@
+# Core dependencies
+langchain>=0.1.0  # Latest version
+langchain-core>=0.1.0
+langchain-community>=0.1.0
+langchain-anthropic>=0.1.0  # For Claude integration
+langchain-openai>=0.1.0  # For OpenAI models
+pydantic>=2.5.0  # For data validation
+python-dotenv>=1.0.0  # For environment variables
+
+# Cryptography and analysis
+cryptography>=42.0.0  # For cryptographic operations
+stegano>=0.11.0  # For steganography analysis
+pillow>=10.2.0  # For image processing
+pycryptodome>=3.19.0  # Additional cryptographic algorithms
+eth-hash>=0.5.2  # For Ethereum hashing
+eth-utils>=2.3.0  # For Ethereum utilities
+web3>=6.12.0  # For blockchain interactions
+
+# Utilities
+numpy>=1.26.0
+matplotlib>=3.8.0  # For visualizations
+tqdm>=4.66.0  # For progress bars 
+rich>=13.7.0  # For rich terminal output
+click>=8.1.7  # For CLI interface
+
+# Binary analysis
+pyelftools>=0.30  # For ELF file analysis
+pefile>=2023.2.7  # For PE file analysis
+
+# Development and testing
+pytest>=7.0.0
+black>=23.1.0
+isort>=5.12.0
+pylint>=3.0.0

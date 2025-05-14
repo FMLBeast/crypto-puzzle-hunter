@@ -1,0 +1,5 @@
+This is an Ethereum address puzzle. Find the secret message hidden in this address:
+
+0x4c7970746f4875 0x6e74657249734177 0x65736f6d65
+
+Hint: How would you concatenate and read these values?
