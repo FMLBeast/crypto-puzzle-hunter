@@ -9,20 +9,38 @@
 
 Crypto Hunter is an AI-powered cryptographic puzzle solver designed to analyze and break various encryption, encoding, and steganography challenges. Built with modern AI technologies including LangChain and LLMs, this tool can tackle a wide range of cryptographic puzzles automatically or assist you in interactive solving sessions.
 
-## 🌟 Features
+## 📂 Project Structure
 
-- **AI-Powered Analysis**: Leverages modern language models to guide the analysis process and interpret results
-- **Modular Analyzer Framework**: Easily extensible with new analyzers for different types of cryptographic challenges
-- **Comprehensive Puzzle Coverage**:
-  - Classic Ciphers (Caesar, Vigenère, Substitution, Atbash, Rail Fence)
-  - Modern Cryptography (XOR, AES, RSA)
-  - Steganography (LSB in images, metadata analysis)
-  - Binary Analysis (file signatures, hidden data)
-  - Blockchain Data (Ethereum addresses, smart contracts)
-  - Encodings (Base64, Hex, ASCII85, Binary, URL, Morse code)
-- **Interactive Mode**: Step-by-step guidance for solving complex puzzles
-- **Rich Visualization**: Detailed insights and transformations displayed in a user-friendly format
-- **Extensible Architecture**: Easy to add new analyzers and capabilities
+Crypto Hunter organizes puzzles and clues in a structured directory layout:
+
+```
+crypto_hunter/
+├── main.py                     # Main entry point 
+├── puzzles/                    # Puzzle files directory
+│   ├── beginner/               # Beginner-level puzzles
+│   ├── intermediate/           # Intermediate-level puzzles
+│   ├── advanced/               # Advanced-level puzzles
+├── clues/                      # Clues directory
+│   ├── beginner/               # Beginner puzzle clues
+│   ├── intermediate/           # Intermediate puzzle clues
+│   ├── advanced/               # Advanced puzzle clues
+├── results/                    # Analysis results directory
+├── analyzers/                  # Analyzer modules
+│   ├── binary_analyzer.py      # Binary file analysis
+│   ├── blockchain_analyzer.py  # Blockchain data analysis
+│   ├── cipher_analyzer.py      # Cipher detection and solving
+│   ├── encoding_analyzer.py    # Encoding detection
+│   ├── image_analyzer.py       # Image steganography analysis
+│   ├── text_analyzer.py        # Text-based puzzle analysis
+├── core/                       # Core functionality
+├── ui/                         # User interface
+├── tools/                      # Helper tools
+```
+
+You can add your own puzzles and clues by placing them in the appropriate directories:
+
+1. To add a puzzle, place it in the `puzzles/` directory or a subdirectory like `puzzles/beginner/`
+2. To add a clue, create a file with the same name as the puzzle but with a `.clue` extension in the corresponding `clues/` directory
 
 ## 🔧 Installation
 
@@ -72,6 +90,9 @@ python main.py --puzzle-file path/to/your/puzzle.txt --iterations 5
 
 # Specify which analyzer to use
 python main.py --puzzle-file path/to/your/puzzle.txt --analyzer text_analyzer
+
+# Use clues if available
+python main.py --puzzle-file path/to/your/puzzle.txt --use-clues
 ```
 
 ### Browsing and Selecting Puzzles
@@ -93,6 +114,29 @@ When browsing puzzles, Crypto Hunter will:
 - Indicate which puzzles have clues available
 - Allow you to select a puzzle to analyze
 - Ask if you want to use available clues
+
+### Interactive Mode
+
+```bash
+# Start interactive mode
+python main.py --interactive
+```
+
+In interactive mode, you can:
+- Load puzzle files
+- Browse and select puzzles from categories
+- Run specific analyzers
+- View analysis insights and transformations
+- Access and use clues when available
+- Ask the AI for help
+- Save and load analysis state
+
+Interactive mode offers additional commands for working with puzzles and clues:
+
+- `browse [category]` - Browse available puzzles in a specific category
+- `clue [file_path]` - Load and display a clue for the current puzzle
+- `create_clue <puzzle_file> <clue_text>` - Create a new clue for a puzzle
+- `categories` - List available puzzle categories
 
 ## 📋 Available Analyzers
 
