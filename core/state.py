@@ -1,362 +1,257 @@
 """
-State management module for Crypto Hunter
-
-This module provides the State class which tracks the current state
-of the analysis, including the puzzle data, insights, and solution.
+State module for the Crypto Hunter.
+Tracks the state of puzzle analysis including insights and transformations.
 """
-import json
+
 import os
-import logging
-import hashlib
 import time
-from datetime import datetime
-from typing import Dict, List, Any, Optional, Union
+import mimetypes
+import hashlib
 from pathlib import Path
-
-import config
-
-logger = logging.getLogger(__name__)
-
+from typing import List, Dict, Any, Optional, Union
 
 class State:
     """
-    Represents the current state of a puzzle analysis.
-    Tracks the puzzle data, insights, analysis history, and solution.
+    Class to track the state of puzzle analysis.
     """
-
-    def __init__(
-        self,
-        puzzle_file: Optional[str] = None,
-        puzzle_data: Optional[bytes] = None,
-        puzzle_text: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ):
+    def __init__(self, puzzle_file: Optional[str] = None):
         """
-        Initialize a new state object.
-
-        Args:
-            puzzle_file: Path to the puzzle file
-            puzzle_data: Raw binary puzzle data
-            puzzle_text: Text representation of the puzzle
-            metadata: Additional metadata about the puzzle
-        """
-        self.created_at = datetime.now().isoformat()
-        self.updated_at = self.created_at
-        self.puzzle_file = puzzle_file
-        self.puzzle_data = puzzle_data
-        self.puzzle_text = puzzle_text
-        self.metadata = metadata or {}
-        self.insights: List[Dict[str, Any]] = []
-        self.analysis_history: List[Dict[str, Any]] = []
-        self.solution: Optional[str] = None
-        self.transformations: List[Dict[str, Any]] = []
-        self.file_type: Optional[str] = None
-        self.file_size: Optional[int] = None
-        self.hash: Optional[str] = None
-        self.analyzers_used: List[str] = []
-        self.status = "initialized"
-
-        # Load data from file if provided
-        if puzzle_file and os.path.exists(puzzle_file):
-            self._load_from_file(puzzle_file)
-
-    def _load_from_file(self, file_path: str) -> None:
-        """
-        Load puzzle data from a file.
-
-        Args:
-            file_path: Path to the puzzle file
-        """
-        try:
-            file_size = os.path.getsize(file_path)
-            
-            # Check if file is too large
-            if file_size > config.MAX_FILE_SIZE:
-                logger.warning(
-                    f"File size ({file_size} bytes) exceeds maximum allowed size "
-                    f"({config.MAX_FILE_SIZE} bytes). Loading first part only."
-                )
-                file_size = config.MAX_FILE_SIZE
-            
-            # Read file data
-            with open(file_path, "rb") as f:
-                self.puzzle_data = f.read(file_size)
-            
-            # Set file metadata
-            self.file_size = file_size
-            self.file_type = os.path.splitext(file_path)[-1].lstrip(".").lower()
-            self.hash = hashlib.sha256(self.puzzle_data).hexdigest()
-            self.metadata["filename"] = os.path.basename(file_path)
-            
-            # Try to decode as text if possible
-            try:
-                self.puzzle_text = self.puzzle_data.decode("utf-8")
-            except UnicodeDecodeError:
-                logger.debug("File is not UTF-8 encoded text")
-                self.puzzle_text = None
-                
-            logger.info(f"Loaded puzzle from file: {file_path}")
-            logger.debug(f"File type: {self.file_type}, size: {self.file_size} bytes")
+        Initialize the analysis state.
         
-        except Exception as e:
-            logger.error(f"Error loading puzzle file: {e}")
-            raise
-
-    def add_insight(self, message: str, analyzer: Optional[str] = None, 
-                    confidence: float = 1.0, data: Optional[Dict[str, Any]] = None) -> None:
-        """
-        Add an insight to the current state.
-
         Args:
-            message: The insight message
-            analyzer: The analyzer that generated the insight
-            confidence: Confidence level (0.0-1.0)
-            data: Additional data related to the insight
+            puzzle_file: Optional filename of the puzzle
         """
-        insight = {
-            "timestamp": datetime.now().isoformat(),
-            "message": message,
+        self.puzzle_file = puzzle_file  # Main puzzle file name
+        self.puzzle_text = None         # Text content (if text file)
+        self.binary_data = None         # Binary content (if binary file)
+        self.file_type = None           # File type (determined from extension or content)
+        self.file_size = None           # File size in bytes
+        self.insights = []              # List of insights gathered during analysis
+        self.transformations = []       # List of transformations applied
+        self.solution = None            # Puzzle solution (if found)
+        self.related_files = {}         # Related files that are part of the puzzle
+        
+        if puzzle_file:
+            self._detect_file_type()
+    
+    def _detect_file_type(self):
+        """Detect the file type based on the filename."""
+        if self.puzzle_file:
+            # Get file extension
+            ext = os.path.splitext(self.puzzle_file)[1].lower()
+            self.file_type = ext[1:] if ext else "unknown"
+    
+    def is_binary(self) -> bool:
+        """Check if the puzzle is a binary file."""
+        if not self.file_type:
+            return False
+        
+        # List of known binary file types
+        binary_types = [
+            "png", "jpg", "jpeg", "gif", "bmp", "tiff", "ico", "webp",
+            "pdf", "doc", "docx", "xls", "xlsx", "zip", "rar", "tar", "gz",
+            "exe", "dll", "bin", "iso", "mp3", "mp4", "wav", "avi", "mov",
+            "class", "jar", "war"
+        ]
+        
+        return self.file_type in binary_types or self.binary_data is not None
+    
+    def is_binary_file(self, file_path) -> bool:
+        """Check if a file is binary based on its path."""
+        ext = os.path.splitext(file_path)[1].lower()
+        file_type = ext[1:] if ext else "unknown"
+        
+        # List of known binary file types
+        binary_types = [
+            "png", "jpg", "jpeg", "gif", "bmp", "tiff", "ico", "webp",
+            "pdf", "doc", "docx", "xls", "xlsx", "zip", "rar", "tar", "gz",
+            "exe", "dll", "bin", "iso", "mp3", "mp4", "wav", "avi", "mov",
+            "class", "jar", "war"
+        ]
+        
+        return file_type in binary_types
+    
+    def set_puzzle_file(self, filename: str) -> None:
+        """
+        Set the puzzle filename.
+        
+        Args:
+            filename: Name of the puzzle file
+        """
+        self.puzzle_file = filename
+        self._detect_file_type()
+    
+    def set_puzzle_text(self, text: str) -> None:
+        """
+        Set the puzzle text content.
+        
+        Args:
+            text: Text content of the puzzle
+        """
+        self.puzzle_text = text
+        self.file_size = len(text.encode("utf-8"))
+    
+    def set_binary_data(self, data: bytes) -> None:
+        """
+        Set the puzzle binary data.
+        
+        Args:
+            data: Binary content of the puzzle
+        """
+        self.binary_data = data
+        self.file_size = len(data)
+    
+    def add_insight(self, text: str, analyzer: str) -> None:
+        """
+        Add an insight to the analysis state.
+        
+        Args:
+            text: Insight text
+            analyzer: Name of the analyzer that generated the insight
+        """
+        current_time = time.strftime("%H:%M:%S")
+        self.insights.append({
+            "time": current_time,
             "analyzer": analyzer,
-            "confidence": confidence,
-            "data": data or {},
-        }
-        self.insights.append(insight)
-        self.updated_at = insight["timestamp"]
-        logger.debug(f"Added insight: {message}")
-
-    def add_transformation(self, name: str, description: str,
-                           input_data: Union[str, bytes],
-                           output_data: Union[str, bytes],
-                           analyzer: Optional[str] = None) -> None:
+            "text": text
+        })
+    
+    def add_transformation(self, name: str, description: str, 
+                           input_data: str, output_data: str, 
+                           analyzer: str) -> None:
         """
-        Add a transformation to the state history.
-
+        Add a transformation to the analysis state.
+        
         Args:
             name: Name of the transformation
             description: Description of what the transformation does
             input_data: Input data for the transformation
             output_data: Output data from the transformation
-            analyzer: The analyzer that performed the transformation
+            analyzer: Name of the analyzer that performed the transformation
         """
-        # Convert bytes to hex string for JSON serialization
-        if isinstance(input_data, bytes):
-            input_data_str = input_data.hex()
-            input_type = "bytes"
-        else:
-            input_data_str = input_data
-            input_type = "str"
-            
-        if isinstance(output_data, bytes):
-            output_data_str = output_data.hex()
-            output_type = "bytes"
-        else:
-            output_data_str = output_data
-            output_type = "str"
-        
-        transformation = {
-            "timestamp": datetime.now().isoformat(),
+        current_time = time.strftime("%H:%M:%S")
+        self.transformations.append({
+            "time": current_time,
             "name": name,
             "description": description,
-            "analyzer": analyzer,
-            "input": {
-                "type": input_type,
-                "data": input_data_str,
-            },
-            "output": {
-                "type": output_type,
-                "data": output_data_str,
-            },
-        }
-        
-        self.transformations.append(transformation)
-        self.updated_at = transformation["timestamp"]
-        logger.debug(f"Added transformation: {name}")
-
-    def record_analyzer_run(self, analyzer_name: str, result: str) -> None:
-        """
-        Record the execution of an analyzer.
-
-        Args:
-            analyzer_name: Name of the analyzer
-            result: Result status of the analyzer run
-        """
-        if analyzer_name not in self.analyzers_used:
-            self.analyzers_used.append(analyzer_name)
-            
-        run_record = {
-            "timestamp": datetime.now().isoformat(),
-            "analyzer": analyzer_name,
-            "result": result,
-        }
-        
-        self.analysis_history.append(run_record)
-        self.updated_at = run_record["timestamp"]
-
-    def set_solution(self, solution: str, confidence: float = 1.0,
-                     analyzer: Optional[str] = None) -> None:
+            "input_data": input_data,
+            "output_data": output_data,
+            "analyzer": analyzer
+        })
+    
+    def set_solution(self, solution: str) -> None:
         """
         Set the solution for the puzzle.
-
+        
         Args:
-            solution: The puzzle solution
-            confidence: Confidence level (0.0-1.0)
-            analyzer: The analyzer that found the solution
+            solution: Solution to the puzzle
         """
         self.solution = solution
-        self.status = "solved"
-        self.updated_at = datetime.now().isoformat()
-        
-        # Add an insight for the solution
-        self.add_insight(
-            f"Solution found: {solution}",
-            analyzer=analyzer,
-            confidence=confidence,
-            data={"solution": solution},
-        )
-        
-        logger.info(f"Solution set: {solution}")
-
-    def to_dict(self) -> Dict[str, Any]:
+    
+    def add_related_file(self, filename: str, content: bytes) -> None:
         """
-        Convert the state to a dictionary.
-
-        Returns:
-            Dictionary representation of the state
+        Add a related file that is part of the puzzle.
+        
+        Args:
+            filename: Name of the related file
+            content: Content of the related file
         """
-        state_dict = {
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "puzzle_file": self.puzzle_file,
-            "file_type": self.file_type,
-            "file_size": self.file_size,
-            "hash": self.hash,
-            "metadata": self.metadata,
-            "insights": self.insights,
-            "analysis_history": self.analysis_history,
-            "transformations": self.transformations,
-            "solution": self.solution,
-            "status": self.status,
-            "analyzers_used": self.analyzers_used,
+        # Determine if the file is binary or text
+        text_content = None
+        try:
+            # Try to decode as text
+            text_content = content.decode("utf-8", errors="replace")
+        except:
+            # Binary file, leave text_content as None
+            pass
+        
+        self.related_files[filename] = {
+            "filename": filename,
+            "content": content,
+            "text_content": text_content,
+            "size": len(content),
+            "mime_type": mimetypes.guess_type(filename)[0] or "application/octet-stream",
+            "sha256": hashlib.sha256(content).hexdigest()
         }
-        
-        # Only include text data if it's available and not too large
-        if self.puzzle_text and len(self.puzzle_text) < 10000:
-            state_dict["puzzle_text"] = self.puzzle_text
-        
-        return state_dict
-
-    def save(self, file_path: str) -> None:
+    
+    def get_related_file(self, filename: str) -> Dict[str, Any]:
         """
-        Save the state to a JSON file.
-
+        Get a related file by name.
+        
         Args:
-            file_path: Path to save the state
-        """
-        try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
-            
-            # Save to JSON
-            with open(file_path, "w") as f:
-                json.dump(self.to_dict(), f, indent=2)
-                
-            logger.info(f"State saved to {file_path}")
+            filename: Name of the related file
         
-        except Exception as e:
-            logger.error(f"Error saving state: {e}")
-            raise
-
-    @classmethod
-    def load(cls, file_path: str) -> "State":
-        """
-        Load a state from a JSON file.
-
-        Args:
-            file_path: Path to the state file
-
         Returns:
-            Loaded State object
+            Dictionary with file information
         """
-        try:
-            with open(file_path, "r") as f:
-                state_dict = json.load(f)
-            
-            # Create new state object
-            state = cls()
-            
-            # Load basic attributes
-            state.created_at = state_dict.get("created_at", datetime.now().isoformat())
-            state.updated_at = state_dict.get("updated_at", state.created_at)
-            state.puzzle_file = state_dict.get("puzzle_file")
-            state.file_type = state_dict.get("file_type")
-            state.file_size = state_dict.get("file_size")
-            state.hash = state_dict.get("hash")
-            state.metadata = state_dict.get("metadata", {})
-            state.puzzle_text = state_dict.get("puzzle_text")
-            state.insights = state_dict.get("insights", [])
-            state.analysis_history = state_dict.get("analysis_history", [])
-            state.transformations = state_dict.get("transformations", [])
-            state.solution = state_dict.get("solution")
-            state.status = state_dict.get("status", "loaded")
-            state.analyzers_used = state_dict.get("analyzers_used", [])
-            
-            # Load puzzle data from file if possible and not already loaded
-            if state.puzzle_file and not state.puzzle_data and os.path.exists(state.puzzle_file):
-                with open(state.puzzle_file, "rb") as f:
-                    state.puzzle_data = f.read()
-            
-            logger.info(f"State loaded from {file_path}")
-            return state
+        return self.related_files.get(filename)
+    
+    def get_all_related_files(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all related files.
         
-        except Exception as e:
-            logger.error(f"Error loading state: {e}")
-            raise
-
-    def clone(self) -> "State":
-        """
-        Create a clone of the current state.
-
         Returns:
-            A new State object with the same data
+            Dictionary of all related files
         """
-        new_state = State()
-        new_state.created_at = self.created_at
-        new_state.updated_at = datetime.now().isoformat()
-        new_state.puzzle_file = self.puzzle_file
-        new_state.puzzle_data = self.puzzle_data
-        new_state.puzzle_text = self.puzzle_text
-        new_state.metadata = self.metadata.copy()
-        new_state.insights = self.insights.copy()
-        new_state.analysis_history = self.analysis_history.copy()
-        new_state.transformations = self.transformations.copy()
-        new_state.solution = self.solution
-        new_state.file_type = self.file_type
-        new_state.file_size = self.file_size
-        new_state.hash = self.hash
-        new_state.analyzers_used = self.analyzers_used.copy()
-        new_state.status = self.status
-        
-        return new_state
-
-    def get_summary(self) -> Dict[str, Any]:
+        return self.related_files
+    
+    def get_summary(self) -> str:
         """
         Get a summary of the current state.
-
+        
         Returns:
-            Dictionary with state summary
+            Summary string
         """
-        return {
-            "puzzle_file": self.puzzle_file,
-            "file_type": self.file_type,
-            "file_size": self.file_size,
-            "hash": self.hash,
-            "num_insights": len(self.insights),
-            "num_transformations": len(self.transformations),
-            "analyzers_used": self.analyzers_used,
-            "status": self.status,
-            "solution": self.solution,
-            "analysis_time": (
-                datetime.fromisoformat(self.updated_at) - 
-                datetime.fromisoformat(self.created_at)
-            ).total_seconds(),
-        }
+        summary = f"File: {self.puzzle_file or 'Not specified'}\n"
+        summary += f"Type: {self.file_type or 'Unknown'}\n"
+        summary += f"Size: {self.file_size or 0} bytes\n"
+        summary += f"Insights: {len(self.insights)}\n"
+        summary += f"Transformations: {len(self.transformations)}\n"
+        summary += f"Related files: {len(self.related_files)}\n"
+        
+        # Add related files list
+        if self.related_files:
+            summary += "Related files:\n"
+            for filename, file_info in self.related_files.items():
+                summary += f"  - {filename} ({file_info['size']} bytes)\n"
+        
+        return summary
+    
+    def get_content_sample(self, max_size: int = 1000) -> str:
+        """
+        Get a sample of the puzzle content for analysis.
+        
+        Args:
+            max_size: Maximum size of the sample
+        
+        Returns:
+            Content sample
+        """
+        if self.puzzle_text:
+            # Text content
+            return self.puzzle_text[:max_size]
+        elif self.binary_data:
+            # Binary content (hex representation)
+            return self.binary_data[:max_size].hex()
+        
+        return "No content available"
+    
+    def get_all_text_content(self) -> Dict[str, str]:
+        """
+        Get all text content from all files.
+        
+        Returns:
+            Dictionary mapping filenames to their text content
+        """
+        result = {}
+        
+        # Add main puzzle file if it's text
+        if self.puzzle_text and self.puzzle_file:
+            result[self.puzzle_file] = self.puzzle_text
+        
+        # Add all related text files
+        for filename, file_info in self.related_files.items():
+            if file_info.get("text_content"):
+                result[filename] = file_info["text_content"]
+        
+        return result
