@@ -16,6 +16,9 @@ Transformations applied:
 Insights gathered:
 {insights}
 
+Patterns from similar puzzles:
+{patterns}
+
 Sample of puzzle content:
 {puzzle_content}
 
@@ -23,7 +26,8 @@ Your task is to:
 1. Identify the likely type of cryptographic challenge
 2. Assess how close we are to a solution
 3. Note any patterns or clues you can observe
-4. Suggest what might be the next step to solve this
+4. Consider how patterns from similar puzzles might apply to this one
+5. Suggest what might be the next step to solve this
 
 Provide a detailed but concise assessment:
 """
@@ -45,10 +49,16 @@ Transformations applied:
 Insights gathered:
 {insights}
 
+Patterns from similar puzzles:
+{patterns}
+
 Previous chat history:
 {chat_history}
 
 Your task is to select the next analysis strategy. 
+Consider how patterns from similar puzzles might inform your strategy selection.
+Look for techniques that worked in similar puzzles and apply them to this one.
+
 Return your answer in this format:
 
 ```json
@@ -83,10 +93,16 @@ your best solution attempt.
 Current state summary:
 {state_summary}
 
+Patterns from similar puzzles:
+{patterns}
+
 Puzzle content:
 {puzzle_content}
 
 Analyze all the information carefully and try to solve the puzzle directly.
+Pay special attention to patterns from similar puzzles - they may contain valuable 
+techniques or approaches that worked in similar situations.
+
 If you can determine a solution, clearly mark it with "SOLUTION:" at the beginning of that line.
 
 If you need more analysis or can't solve it yet, explain what additional steps might help.
@@ -113,5 +129,6 @@ Without LLM assistance, I've applied basic analysis techniques. For text puzzles
 consider common techniques like: Caesar cipher, ROT13, Base64, Hex encoding, Binary 
 encoding, or ASCII representation. For images, check for steganography using tools 
 like steghide or examine metadata. For binary files, analyze file signatures and 
-structures using hexdump.
+structures using hexdump. Also consider patterns from similar puzzles that might 
+provide insights into techniques that worked in similar situations.
 """

@@ -860,6 +860,13 @@ def analyze_text(text: str) -> dict:
         Returns:
             List of created tool IDs
         """
+        # Check for Arweave puzzle patterns
+        is_arweave_puzzle = self._check_for_arweave_patterns(state)
+
+        if is_arweave_puzzle:
+            logger.info("Detected Arweave puzzle pattern, registering specialized Arweave tools")
+            return self._create_arweave_tools(state)
+
         if not self.llm_agent or getattr(self.llm_agent, "fallback_mode", False):
             logger.info("No LLM available for tool creation, using defaults")
             return self._create_default_tools()
@@ -904,6 +911,91 @@ FORMAT YOUR RESPONSE AS A JSON ARRAY OF OBJECTS:
 
         except Exception as e:
             logger.error(f"Error analyzing and creating tools: {e}")
+            return self._create_default_tools()
+
+    def _check_for_arweave_patterns(self, state: Any) -> bool:
+        """
+        Check if the puzzle state contains Arweave puzzle patterns.
+
+        Args:
+            state: Current puzzle state
+
+        Returns:
+            True if Arweave puzzle patterns are detected, False otherwise
+        """
+        # Check if any patterns in the state match Arweave puzzle series
+        for pattern in state.patterns:
+            pattern_text = pattern.get("text", "").lower()
+            pattern_file = pattern.get("file", "").lower()
+            pattern_category = pattern.get("category", "").lower()
+
+            # Check for Arweave-specific patterns
+            if any(keyword in pattern_text for keyword in ["arweave", "ar token", "permaweb", "winston"]):
+                return True
+
+            # Check for pattern file or category containing Arweave
+            if "arweave" in pattern_file or "arweave" in pattern_category:
+                return True
+
+            # Check for specific Arweave puzzle series patterns
+            if "puzzle weave" in pattern_text or "arweave puzzle series" in pattern_text:
+                return True
+
+        # Check insights for Arweave-related content
+        for insight in state.insights:
+            insight_text = insight.get("text", "").lower()
+            if any(keyword in insight_text for keyword in ["arweave", "ar token", "permaweb", "winston", "puzzle weave"]):
+                return True
+
+        # Check puzzle text for Arweave-related content
+        if state.puzzle_text:
+            puzzle_text = state.puzzle_text.lower()
+            if any(keyword in puzzle_text for keyword in ["arweave", "ar token", "permaweb", "winston", "puzzle weave"]):
+                return True
+
+        return False
+
+    def _create_arweave_tools(self, state: Any) -> List[str]:
+        """
+        Create specialized tools for Arweave puzzles.
+
+        Args:
+            state: Current puzzle state
+
+        Returns:
+            List of created tool IDs
+        """
+        try:
+            # Import the Arweave tools registration function
+            from core.arweave_tools_main import register_arweave_tools_with_agent
+
+            # Register all Arweave tools with this agent
+            registered_tools = register_arweave_tools_with_agent(self)
+
+            # Extract tool IDs
+            tool_ids = [tool["tool_id"] for tool in registered_tools]
+
+            # Add insight about registered tools
+            categories = set(tool["category"] for tool in registered_tools)
+            state.add_insight(
+                f"Registered {len(tool_ids)} specialized Arweave puzzle tools covering {len(categories)} puzzle weaves",
+                analyzer="code_agent"
+            )
+
+            # Group tools by category for better insights
+            for category in categories:
+                category_tools = [tool for tool in registered_tools if tool["category"] == category]
+                tool_names = [f"{tool['name']}" for tool in category_tools]
+                state.add_insight(
+                    f"{category} tools: {', '.join(tool_names)}",
+                    analyzer="code_agent"
+                )
+
+            return tool_ids
+
+        except Exception as e:
+            logger.error(f"Error creating Arweave tools: {e}")
+            # Fall back to default tools if there's an error
             return self._create_default_tools()
 
     def _create_default_tools(self) -> List[str]:

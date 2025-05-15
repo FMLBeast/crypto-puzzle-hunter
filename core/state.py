@@ -33,6 +33,7 @@ class State:
         self.solution = None            # Puzzle solution (if found)
         self.related_files = {}         # Related files that are part of the puzzle
         self.clues = []                 # Clues associated with this puzzle
+        self.patterns = []              # Patterns from similar puzzles or techniques
 
         if puzzle_file:
             self._detect_file_type()
@@ -200,6 +201,22 @@ class State:
             "time": time.strftime("%H:%M:%S")
         })
 
+    def add_pattern(self, pattern_text: str, pattern_file: str = None, category: str = None) -> None:
+        """
+        Add a pattern from similar puzzles or techniques.
+
+        Args:
+            pattern_text: Text of the pattern
+            pattern_file: Optional filename of the pattern file
+            category: Optional category of the pattern
+        """
+        self.patterns.append({
+            "text": pattern_text,
+            "file": pattern_file,
+            "category": category,
+            "time": time.strftime("%H:%M:%S")
+        })
+
     def get_related_file(self, filename: str) -> Dict[str, Any]:
         """
         Get a related file by name.
@@ -235,6 +252,7 @@ class State:
         summary += f"Transformations: {len(self.transformations)}\n"
         summary += f"Related files: {len(self.related_files)}\n"
         summary += f"Clues: {len(self.clues)}\n"
+        summary += f"Patterns: {len(self.patterns)}\n"
 
         # Add related files list
         if self.related_files:
@@ -247,6 +265,13 @@ class State:
             summary += "Clues:\n"
             for clue in self.clues:
                 summary += f"  - {clue['text'][:50]}{'...' if len(clue['text']) > 50 else ''}\n"
+
+        # Add patterns
+        if self.patterns:
+            summary += "Patterns:\n"
+            for pattern in self.patterns:
+                category = pattern.get('category', 'Unknown')
+                summary += f"  - [{category}] {pattern['text'][:50]}{'...' if len(pattern['text']) > 50 else ''}\n"
 
         return summary
 

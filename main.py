@@ -18,7 +18,7 @@ from rich import box
 
 from core.state import State
 from core.agent import CryptoAgent
-from core.utils import browse_puzzles, get_puzzle_info, setup_logging, load_clues
+from core.utils import browse_puzzles, get_puzzle_info, setup_logging, load_clues, load_patterns
 from core.logger import solution_logger
 
 console = Console()
@@ -35,7 +35,7 @@ def parse_arguments():
     parser.add_argument("--use-clues", action="store_true", help="Use available clues for the puzzle")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("--interactive", action="store_true", help="Run in interactive mode")
-    parser.add_argument("--iterations", type=int, default=5, help="Maximum number of analysis iterations")
+    parser.add_argument("--iterations", type=int, default=15, help="Maximum number of analysis iterations")
     parser.add_argument("--provider", type=str, default="anthropic",
                         choices=["anthropic", "openai", "huggingface", "local"],
                         help="LLM provider to use")
@@ -233,6 +233,19 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
         else:
             console.print("[yellow]No clues found.[/yellow]")
 
+    # Load patterns from similar puzzles
+    console.print("\n[bold]Loading patterns from similar puzzles...[/bold]")
+    patterns = load_patterns(folder_path)
+
+    if patterns:
+        console.print(f"[green]Found {len(patterns)} patterns![/green]")
+
+        for i, pattern in enumerate(patterns, 1):
+            console.print(f"[bold]Pattern {i}:[/bold] {pattern['file']} [{pattern['category']}]")
+            state.add_pattern(pattern['text'], pattern['file'], pattern['category'])
+    else:
+        console.print("[yellow]No patterns found.[/yellow]")
+
     # Show folder contents summary
     console.print("\n[bold]Puzzle Folder Summary:[/bold]")
     folder_table = Table(show_header=True, header_style="bold magenta")
@@ -373,6 +386,19 @@ def process_puzzle(puzzle_path, agent, output_dir="./output", iterations=5, resu
             else:
                 console.print("[yellow]No clues found.[/yellow]")
 
+        # Load patterns from similar puzzles
+        console.print("\n[bold]Loading patterns from similar puzzles...[/bold]")
+        patterns = load_patterns(path)
+
+        if patterns:
+            console.print(f"[green]Found {len(patterns)} patterns![/green]")
+
+            for i, pattern in enumerate(patterns, 1):
+                console.print(f"[bold]Pattern {i}:[/bold] {pattern['file']} [{pattern['category']}]")
+                state.add_pattern(pattern['text'], pattern['file'], pattern['category'])
+        else:
+            console.print("[yellow]No patterns found.[/yellow]")
+
         # Debug before analysis
         if verbose:
             console.print("[blue]Starting analysis with LLM agent...[/blue]")
@@ -473,6 +499,23 @@ def display_results(state, puzzle_path):
             )
 
         console.print(clues_table)
+
+    # Display patterns
+    if state.patterns:
+        console.print("\n[bold]Patterns from Similar Puzzles[/bold]")
+        patterns_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
+        patterns_table.add_column("Category")
+        patterns_table.add_column("File")
+        patterns_table.add_column("Description")
+
+        for pattern in state.patterns:
+            patterns_table.add_row(
+                pattern.get("category", "Unknown"),
+                pattern.get("file", "N/A"),
+                pattern.get("text", "")[:50] + ("..." if len(pattern.get("text", "")) > 50 else "")
+            )
+
+        console.print(patterns_table)
 
     # Display transformations
     console.print("\n[bold]Transformations[/bold]")

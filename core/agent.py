@@ -337,12 +337,19 @@ class CryptoAgent:
         insights = json.dumps(state.insights, indent=2)
         puzzle_content = state.get_content_sample(max_size=4000)
 
+        # Include patterns in the assessment
+        patterns = json.dumps([{
+            "category": p.get("category", "Unknown"),
+            "text": p.get("text", "")
+        } for p in state.patterns], indent=2)
+
         try:
             result = self.state_assessment_chain.invoke({
                 "state_summary": state_summary,
                 "transformations": transformations,
                 "insights": insights,
                 "puzzle_content": puzzle_content,
+                "patterns": patterns,
             })
 
             if hasattr(result, 'content'):
@@ -364,12 +371,19 @@ class CryptoAgent:
         transformations = json.dumps(state.transformations, indent=2)
         insights = json.dumps(state.insights, indent=2)
 
+        # Include patterns in the strategy selection
+        patterns = json.dumps([{
+            "category": p.get("category", "Unknown"),
+            "text": p.get("text", "")
+        } for p in state.patterns], indent=2)
+
         try:
             result = self.strategy_chain.invoke({
                 "state_summary": state_summary,
                 "assessment": assessment,
                 "transformations": transformations,
                 "insights": insights,
+                "patterns": patterns,
                 "chat_history": self.chat_history,
             })
 
@@ -415,10 +429,17 @@ class CryptoAgent:
         state_summary = state.get_summary()
         puzzle_content = state.get_content_sample(max_size=8000)
 
+        # Include patterns in the direct solution attempt
+        patterns = json.dumps([{
+            "category": p.get("category", "Unknown"),
+            "text": p.get("text", "")
+        } for p in state.patterns], indent=2)
+
         try:
             result = self.direct_solution_chain.invoke({
                 "state_summary": state_summary,
                 "puzzle_content": puzzle_content,
+                "patterns": patterns,
             })
 
             solution_text = ""
