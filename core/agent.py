@@ -250,6 +250,47 @@ class CryptoAgent:
         Returns:
             Updated puzzle state
         """
+        # Import user interaction module
+        try:
+            from core.user_interaction import (
+                start_user_interaction, check_for_user_input, 
+                process_user_input, register_callback, set_context
+            )
+            user_interaction_available = True
+        except ImportError:
+            user_interaction_available = False
+            print("User interaction module not available. Running without interactive capabilities.")
+
+        # Setup user interaction if available
+        if user_interaction_available:
+            # Start listening for user input
+            start_user_interaction()
+
+            # Register callback for handling questions
+            def handle_question(question: str, context: dict) -> str:
+                """Handle user questions during analysis."""
+                try:
+                    # Generate a response using the LLM
+                    prompt = f"""
+                    The user has asked the following question during puzzle analysis:
+                    "{question}"
+
+                    Current puzzle state:
+                    - Puzzle type: {context.get('puzzle_type', 'Unknown')}
+                    - Current insights: {len(context.get('insights', []))} insights gathered
+                    - Current transformations: {len(context.get('transformations', []))} transformations applied
+                    - Solution found: {'Yes' if context.get('solution') else 'No'}
+
+                    Please provide a helpful response to the user's question.
+                    """
+
+                    response = self._send_to_llm(prompt)
+                    return response or "I'm sorry, I couldn't generate a response at this time."
+                except Exception as e:
+                    return f"Error processing your question: {str(e)}"
+
+            register_callback("question_callback", handle_question)
+
         # Handle fallback mode
         if self.fallback_mode:
             print("Running in fallback mode without LLM assistance.")
@@ -263,6 +304,21 @@ class CryptoAgent:
                 try:
                     print(f"Running {name}...")
                     state = analyzer_func(state)
+
+                    # Check for user input if available
+                    if user_interaction_available:
+                        user_input = check_for_user_input()
+                        if user_input:
+                            context = {
+                                "puzzle_type": state.puzzle_type,
+                                "insights": state.insights,
+                                "transformations": state.transformations,
+                                "solution": state.solution,
+                                "current_task": f"Running analyzer: {name}"
+                            }
+                            set_context(context)
+                            process_user_input(user_input, context)
+
                 except Exception as e:
                     print(f"Error in {name}: {e}")
                     state.add_insight(f"Error in {name}: {e}", analyzer="agent")
@@ -278,6 +334,24 @@ class CryptoAgent:
                 iteration += 1
                 print(f"Iteration {iteration}/{max_iterations}")
 
+                # Update context for user interaction
+                if user_interaction_available:
+                    context = {
+                        "puzzle_type": state.puzzle_type,
+                        "insights": state.insights,
+                        "transformations": state.transformations,
+                        "solution": state.solution,
+                        "current_task": f"Analysis iteration {iteration}/{max_iterations}",
+                        "progress": f"{iteration}/{max_iterations}"
+                    }
+                    set_context(context)
+
+                # Check for user input
+                if user_interaction_available:
+                    user_input = check_for_user_input()
+                    if user_input:
+                        process_user_input(user_input, context)
+
                 # Check if we've made progress
                 if previous_insights_count == len(state.insights) and iteration > 1:
                     print("No new insights gained in this iteration. Trying direct solution...")
@@ -286,11 +360,19 @@ class CryptoAgent:
                 previous_insights_count = len(state.insights)
 
                 # Assess the current state
+                print("Assessing current state...")
                 assessment = self._assess_state(state)
                 if assessment:
                     state.add_insight(f"Assessment: {assessment}", analyzer="agent")
 
+                # Check for user input again
+                if user_interaction_available:
+                    user_input = check_for_user_input()
+                    if user_input:
+                        process_user_input(user_input, context)
+
                 # Select a strategy
+                print("Selecting strategy...")
                 strategy_result = self._select_strategy(state, assessment)
                 if not strategy_result:
                     print("Failed to select a strategy. Trying direct solution...")
@@ -304,11 +386,23 @@ class CryptoAgent:
 
                 state.add_insight(f"Selected strategy: {strategy} using {analyzer}", analyzer="agent")
 
+                # Check for user input again
+                if user_interaction_available:
+                    user_input = check_for_user_input()
+                    if user_input:
+                        process_user_input(user_input, context)
+
                 # Execute the selected analyzer
                 if analyzer:
+                    print(f"Executing analyzer: {analyzer}")
                     from analyzers import get_analyzer
                     analyzer_func = get_analyzer(analyzer)
                     if analyzer_func:
+                        # Update context for user interaction
+                        if user_interaction_available:
+                            context["current_task"] = f"Running analyzer: {analyzer}"
+                            set_context(context)
+
                         state = analyzer_func(state, **params)
                     else:
                         state.add_insight(f"Analyzer '{analyzer}' not found", analyzer="agent")
