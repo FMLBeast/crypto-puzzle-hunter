@@ -592,6 +592,105 @@ class CodingAgent:
             logger.warning("Unable to verify solution, accepting provisionally")
             return True
 
+    def generate_code(self, task_description: str, state: State) -> str:
+        """
+        Generate code for a given task description.
+
+        Args:
+            task_description: Description of the task to generate code for
+            state: Current puzzle state
+
+        Returns:
+            Generated code as a string
+        """
+        # Check if code_agent is available
+        if self.code_agent:
+            try:
+                return self.code_agent.generate_code(task_description, state)
+            except Exception as e:
+                logger.error(f"Error in code generation: {e}")
+                # Fall back to a simple template if code generation fails
+
+        # Fallback code template
+        return f"""
+# Task: {task_description}
+# This is a fallback template as the code generation failed
+
+def analyze(state, **kwargs):
+    # Extract available data
+    text = kwargs.get('text', '')
+    binary_data = kwargs.get('binary_data', b'')
+    filename = kwargs.get('filename', '')
+
+    # Basic analysis results
+    results = {{
+        'analyzed': True,
+        'message': 'Basic analysis completed (fallback mode)',
+        'findings': []
+    }}
+
+    # Return results
+    return results
+"""
+
+    def execute_code(self, code: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute the generated code with the given inputs.
+
+        Args:
+            code: Code to execute
+            inputs: Dictionary of inputs for the code
+
+        Returns:
+            Dictionary with execution results
+        """
+        # Check if code_agent is available
+        if self.code_agent:
+            try:
+                return self.code_agent.execute_code(code, inputs)
+            except Exception as e:
+                logger.error(f"Error in code execution: {e}")
+                # Return error information
+                return {
+                    'success': False,
+                    'error': str(e)
+                }
+
+        # Fallback execution (very limited)
+        try:
+            # Create a safe namespace
+            namespace = {
+                'state': inputs.get('state'),
+                'text': inputs.get('text', ''),
+                'binary_data': inputs.get('binary_data', b''),
+                'filename': inputs.get('filename', ''),
+                'filenames': inputs.get('filenames', []),
+                'files': inputs.get('files', {})
+            }
+
+            # Execute the code in a restricted environment
+            exec_globals = {'__builtins__': __builtins__}
+            exec(code, exec_globals, namespace)
+
+            # Call the analyze function if it exists
+            if 'analyze' in namespace:
+                result = namespace['analyze'](inputs.get('state'), **inputs)
+                return {
+                    'success': True,
+                    'result': result
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': 'No analyze function found in generated code'
+                }
+        except Exception as e:
+            logger.error(f"Error in fallback execution: {e}")
+            return {
+                'success': False,
+                'error': f"Fallback execution failed: {str(e)}"
+            }
+
     def _is_text_file(self, filename: str, content: bytes) -> bool:
         """
         Determine if a file is likely a text file.

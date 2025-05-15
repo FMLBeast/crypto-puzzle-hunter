@@ -58,7 +58,7 @@ class UserInteractionHandler:
             # Windows doesn't support select on stdin, use a simpler approach
             while self.is_listening:
                 try:
-                    console.print("\n[bold cyan]>>> [/bold cyan]", end="", flush=True)
+                    console.print("\n[bold cyan]>>> [/bold cyan]", end="")
                     user_input = input()
                     if user_input.strip():
                         self.input_queue.put(user_input)
@@ -70,7 +70,7 @@ class UserInteractionHandler:
             while self.is_listening:
                 try:
                     # Check if input is available
-                    console.print("\n[bold cyan]>>> [/bold cyan]", end="", flush=True)
+                    console.print("\n[bold cyan]>>> [/bold cyan]", end="")
                     rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
 
                     if rlist:
