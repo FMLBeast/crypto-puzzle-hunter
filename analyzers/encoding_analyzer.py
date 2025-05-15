@@ -7,6 +7,7 @@ import re
 import base64
 import binascii
 import string
+import os
 import urllib.parse
 from core.state import State
 from analyzers.base import register_analyzer, analyzer_compatibility
@@ -1048,6 +1049,57 @@ def analyze_leetspeak(state: State, text: str) -> None:
             )
 
 # Utility functions
+
+def detect_encoding(text: str) -> str:
+    """
+    Attempt to detect the encoding of a given text.
+
+    Args:
+        text: Text to analyze
+
+    Returns:
+        String describing the detected encoding, or None if no encoding is detected
+    """
+    # Clean text by removing whitespace
+    clean_text = ''.join(c for c in text if c not in ' \t\n\r')
+
+    if not clean_text:
+        return None
+
+    # Check for Base64
+    base64_chars = set(string.ascii_letters + string.digits + '+/=')
+    base64_url_chars = set(string.ascii_letters + string.digits + '-_=')
+
+    if (all(c in base64_chars for c in clean_text) or all(c in base64_url_chars for c in clean_text)) and len(clean_text) % 4 == 0:
+        return "Base64"
+
+    # Check for Hex
+    if all(c in string.hexdigits for c in clean_text) and len(clean_text) % 2 == 0:
+        return "Hexadecimal"
+
+    # Check for Binary
+    if all(c in '01' for c in clean_text) and len(clean_text) >= 8:
+        return "Binary"
+
+    # Check for ASCII85/Base85
+    if clean_text.startswith('<~') and clean_text.endswith('~>'):
+        return "ASCII85"
+
+    # Check for URL encoding
+    if '%' in clean_text and re.search(r'%[0-9A-Fa-f]{2}', clean_text):
+        return "URL encoding"
+
+    # Check for HTML entities
+    if '&' in clean_text and ';' in clean_text and re.search(r'&[#a-zA-Z0-9]+;', clean_text):
+        return "HTML entities"
+
+    # Check for Morse code
+    morse_chars = set('.-/ \t\n')
+    morse_ratio = sum(1 for c in text if c in morse_chars) / len(text) if text else 0
+    if morse_ratio > 0.9:
+        return "Morse code"
+
+    return None
 
 def rot13_char(c: str) -> str:
     """

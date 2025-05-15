@@ -80,19 +80,19 @@ export ETHERSCAN_API_KEY="your_api_key_here"
 
 ```bash
 # Basic usage
-python main.py --puzzle-file path/to/your/puzzle.txt
+python main.py --puzzle-file path/to/your/description.txt
 
 # With increased verbosity
-python main.py --puzzle-file path/to/your/puzzle.txt --verbose
+python main.py --puzzle-file path/to/your/description.txt --verbose
 
 # Limit analysis iterations
-python main.py --puzzle-file path/to/your/puzzle.txt --iterations 5
+python main.py --puzzle-file path/to/your/description.txt --iterations 5
 
 # Specify which analyzer to use
-python main.py --puzzle-file path/to/your/puzzle.txt --analyzer text_analyzer
+python main.py --puzzle-file path/to/your/description.txt --analyzer text_analyzer
 
 # Use clues if available
-python main.py --puzzle-file path/to/your/puzzle.txt --use-clues
+python main.py --puzzle-file path/to/your/description.txt --use-clues
 ```
 
 ### Real-Time Solution Process
@@ -258,7 +258,7 @@ from core.logger import solution_logger
 solution_logger.__init__(verbose=True)
 
 # Initialize the state with a puzzle file
-state = State(puzzle_file="path/to/puzzle.txt")
+state = State(puzzle_file="path/to/description.txt")
 
 # Create a crypto agent
 agent = CryptoAgent(provider="anthropic")  # or "openai"

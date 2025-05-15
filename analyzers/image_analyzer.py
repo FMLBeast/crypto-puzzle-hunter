@@ -21,6 +21,14 @@ try:
 except ImportError:
     HAS_PIL = False
 
+# Import OpenCV if available
+try:
+    import cv2
+    import numpy as np
+    HAS_OPENCV = True
+except ImportError:
+    HAS_OPENCV = False
+
 @register_analyzer("image_analyzer")
 @analyzer_compatibility(requires_binary=True)
 def analyze_image(state: State, **kwargs) -> None:
@@ -1644,3 +1652,350 @@ def calculate_std_dev(values: list) -> float:
     mean = sum(values) / len(values)
     variance = sum((x - mean) ** 2 for x in values) / len(values)
     return math.sqrt(variance)
+
+@register_analyzer("opencv_vision_analyzer")
+@analyzer_compatibility(requires_binary=True)
+def analyze_image_with_opencv(state: State, **kwargs) -> State:
+    """
+    Analyze image using OpenCV for computer vision tasks.
+    This is an alternative to the Anthropic/OpenAI vision API.
+
+    Args:
+        state: Current puzzle state
+        **kwargs: Additional parameters (ignored)
+
+    Returns:
+        Updated state
+    """
+    if not state.binary_data:
+        state.add_insight(
+            "No binary image data available for OpenCV analysis",
+            analyzer="opencv_vision_analyzer"
+        )
+        return state
+
+    # Check if OpenCV is available
+    if not HAS_OPENCV:
+        state.add_insight(
+            "OpenCV is not available. Install it with 'pip install opencv-python'",
+            analyzer="opencv_vision_analyzer"
+        )
+        return state
+
+    try:
+        # Convert binary data to OpenCV image
+        nparr = np.frombuffer(state.binary_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            state.add_insight(
+                "Failed to decode image data with OpenCV",
+                analyzer="opencv_vision_analyzer"
+            )
+            return state
+
+        # Get basic image information
+        height, width, channels = img.shape
+
+        state.add_insight(
+            f"OpenCV analysis: Image dimensions: {width}x{height}, Channels: {channels}",
+            analyzer="opencv_vision_analyzer"
+        )
+
+        # Perform various analyses
+        results = {}
+
+        # 1. Text detection using OCR (if available)
+        try:
+            text = detect_text_with_opencv(img)
+            if text:
+                results["detected_text"] = text
+                state.add_insight(
+                    f"OpenCV detected text in the image: {text[:100]}{'...' if len(text) > 100 else ''}",
+                    analyzer="opencv_vision_analyzer"
+                )
+
+                # Add transformation with detected text
+                state.add_transformation(
+                    name="OpenCV Text Detection",
+                    description="Text detected in the image using OpenCV",
+                    input_data=f"Image ({width}x{height})",
+                    output_data=text,
+                    analyzer="opencv_vision_analyzer"
+                )
+        except Exception as e:
+            state.add_insight(
+                f"Error in OpenCV text detection: {e}",
+                analyzer="opencv_vision_analyzer"
+            )
+
+        # 2. Edge detection
+        try:
+            edges = cv2.Canny(img, 100, 200)
+            edge_percentage = np.count_nonzero(edges) / (width * height) * 100
+            results["edge_percentage"] = edge_percentage
+
+            state.add_insight(
+                f"OpenCV edge detection: {edge_percentage:.2f}% of pixels are edges",
+                analyzer="opencv_vision_analyzer"
+            )
+
+            # If high edge percentage, might be a diagram or text
+            if edge_percentage > 10:
+                state.add_insight(
+                    "High edge percentage detected, image may contain diagrams, text, or complex patterns",
+                    analyzer="opencv_vision_analyzer"
+                )
+        except Exception as e:
+            state.add_insight(
+                f"Error in OpenCV edge detection: {e}",
+                analyzer="opencv_vision_analyzer"
+            )
+
+        # 3. Color analysis
+        try:
+            # Convert to HSV for better color analysis
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+            # Calculate color histograms
+            color_counts = {}
+
+            # Simplified color detection
+            color_ranges = {
+                "red": ([0, 100, 100], [10, 255, 255]),
+                "yellow": ([20, 100, 100], [35, 255, 255]),
+                "green": ([36, 100, 100], [70, 255, 255]),
+                "blue": ([90, 100, 100], [130, 255, 255]),
+                "purple": ([131, 100, 100], [170, 255, 255])
+            }
+
+            for color_name, (lower, upper) in color_ranges.items():
+                lower = np.array(lower, dtype=np.uint8)
+                upper = np.array(upper, dtype=np.uint8)
+                mask = cv2.inRange(hsv, lower, upper)
+                color_counts[color_name] = np.count_nonzero(mask) / (width * height) * 100
+
+            # Find dominant colors
+            dominant_colors = [color for color, percentage in color_counts.items() if percentage > 5]
+
+            if dominant_colors:
+                results["dominant_colors"] = dominant_colors
+                state.add_insight(
+                    f"OpenCV color analysis: Dominant colors: {', '.join(dominant_colors)}",
+                    analyzer="opencv_vision_analyzer"
+                )
+        except Exception as e:
+            state.add_insight(
+                f"Error in OpenCV color analysis: {e}",
+                analyzer="opencv_vision_analyzer"
+            )
+
+        # 4. Feature detection
+        try:
+            # Convert to grayscale for feature detection
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+            # Detect keypoints using FAST algorithm
+            fast = cv2.FastFeatureDetector_create()
+            keypoints = fast.detect(gray, None)
+
+            results["keypoint_count"] = len(keypoints)
+            state.add_insight(
+                f"OpenCV feature detection: Found {len(keypoints)} keypoints",
+                analyzer="opencv_vision_analyzer"
+            )
+
+            # If many keypoints, might be a complex image
+            if len(keypoints) > 500:
+                state.add_insight(
+                    "High number of keypoints detected, image may contain complex patterns or objects",
+                    analyzer="opencv_vision_analyzer"
+                )
+        except Exception as e:
+            state.add_insight(
+                f"Error in OpenCV feature detection: {e}",
+                analyzer="opencv_vision_analyzer"
+            )
+
+        # 5. QR code detection
+        try:
+            qr_data = detect_qr_code(img)
+            if qr_data:
+                results["qr_code"] = qr_data
+                state.add_insight(
+                    f"OpenCV detected QR code: {qr_data}",
+                    analyzer="opencv_vision_analyzer"
+                )
+
+                # Add transformation with QR code data
+                state.add_transformation(
+                    name="QR Code Detection",
+                    description="QR code detected in the image using OpenCV",
+                    input_data=f"Image ({width}x{height})",
+                    output_data=qr_data,
+                    analyzer="opencv_vision_analyzer"
+                )
+        except Exception as e:
+            state.add_insight(
+                f"Error in OpenCV QR code detection: {e}",
+                analyzer="opencv_vision_analyzer"
+            )
+
+        # 6. Check for hidden patterns in bit planes
+        try:
+            bit_plane_results = analyze_bit_planes(img)
+            if bit_plane_results:
+                results["bit_plane_analysis"] = bit_plane_results
+                state.add_insight(
+                    f"OpenCV bit plane analysis: {bit_plane_results}",
+                    analyzer="opencv_vision_analyzer"
+                )
+        except Exception as e:
+            state.add_insight(
+                f"Error in OpenCV bit plane analysis: {e}",
+                analyzer="opencv_vision_analyzer"
+            )
+
+        # Add a summary transformation with all results
+        if results:
+            state.add_transformation(
+                name="OpenCV Vision Analysis Summary",
+                description="Summary of all OpenCV-based image analyses",
+                input_data=f"Image ({width}x{height})",
+                output_data=str(results),
+                analyzer="opencv_vision_analyzer"
+            )
+
+    except Exception as e:
+        state.add_insight(
+            f"Error in OpenCV image analysis: {e}",
+            analyzer="opencv_vision_analyzer"
+        )
+
+    return state
+
+def detect_text_with_opencv(img):
+    """
+    Detect text in an image using OpenCV.
+    This is a basic implementation that works without additional dependencies.
+
+    Args:
+        img: OpenCV image
+
+    Returns:
+        Detected text or empty string if none found
+    """
+    # Convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Apply thresholding to get binary image
+    _, binary = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+
+    # Find contours
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Filter contours that might be text
+    text_contours = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        aspect_ratio = w / float(h)
+        area = cv2.contourArea(contour)
+
+        # Text usually has specific aspect ratio and area
+        if 0.1 < aspect_ratio < 15 and area > 100:
+            text_contours.append(contour)
+
+    # If we found potential text contours, return a message
+    if len(text_contours) > 10:
+        return f"Detected approximately {len(text_contours)} potential text elements in the image"
+
+    return ""
+
+def detect_qr_code(img):
+    """
+    Detect QR codes in an image using OpenCV.
+
+    Args:
+        img: OpenCV image
+
+    Returns:
+        Decoded QR code data or empty string if none found
+    """
+    # Try to use QRCodeDetector if available (OpenCV 3.4.0+)
+    try:
+        qr_detector = cv2.QRCodeDetector()
+        data, bbox, _ = qr_detector.detectAndDecode(img)
+
+        if data:
+            return data
+    except:
+        pass
+
+    # Fallback method using contour detection
+    try:
+        # Convert to grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Apply thresholding
+        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+
+        # Find contours
+        contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Look for square contours (potential QR codes)
+        for contour in contours:
+            # Approximate contour
+            peri = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+
+            # If contour has 4 points, it might be a QR code
+            if len(approx) == 4:
+                x, y, w, h = cv2.boundingRect(contour)
+                aspect_ratio = w / float(h)
+
+                # QR codes are square
+                if 0.8 < aspect_ratio < 1.2 and w > 30 and h > 30:
+                    return "Potential QR code detected (data could not be decoded)"
+    except:
+        pass
+
+    return ""
+
+def analyze_bit_planes(img):
+    """
+    Analyze bit planes of an image for hidden patterns.
+
+    Args:
+        img: OpenCV image
+
+    Returns:
+        Dictionary with analysis results
+    """
+    results = {}
+
+    # Convert to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Check each bit plane
+    for bit in range(8):
+        # Extract bit plane
+        bit_plane = (gray >> bit) & 1
+        bit_plane = bit_plane * 255  # Scale to 0-255 for visualization
+
+        # Calculate statistics
+        non_zero = np.count_nonzero(bit_plane)
+        total = bit_plane.size
+        percentage = non_zero / total * 100
+
+        # Check for unusual distribution
+        if 30 < percentage < 70:
+            # Calculate entropy
+            hist = cv2.calcHist([bit_plane], [0], None, [2], [0, 256])
+            hist = hist / total
+            entropy = -np.sum(hist * np.log2(hist + 1e-10))
+
+            # If entropy is high, might contain hidden data
+            if entropy > 0.9:
+                results[f"bit_plane_{bit}"] = f"Unusual pattern detected (entropy: {entropy:.2f})"
+
+    return results

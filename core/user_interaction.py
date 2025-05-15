@@ -6,12 +6,19 @@ Provides functionality for handling user input during agent processing.
 import threading
 import queue
 import time
+import sys
+import select
+import os
+import signal
 from typing import Optional, Callable, Dict, Any, List
 from rich.console import Console
 from rich.prompt import Prompt
 
 # Console for user interaction
 console = Console()
+
+# Global queue for user input
+user_input_buffer = queue.Queue()
 
 class UserInteractionHandler:
     """
@@ -36,7 +43,7 @@ class UserInteractionHandler:
         self.is_listening = True
         self.listener_thread = threading.Thread(target=self._input_listener, daemon=True)
         self.listener_thread.start()
-        console.print("[dim]User interaction enabled. Type a message at any time to interact with the agent.[/dim]")
+        console.print("[dim]User interaction enabled.[/dim]")
 
     def stop_listening(self):
         """Stop listening for user input."""
@@ -46,52 +53,25 @@ class UserInteractionHandler:
             self.listener_thread = None
 
     def _input_listener(self):
-        """Thread function that listens for user input."""
-        import sys
-        import select
-        import os
+        """Thread function that listens for user input.
 
-        # Check if we're on Windows
-        is_windows = os.name == 'nt'
-
-        if is_windows:
-            # Windows doesn't support select on stdin, use a simpler approach
-            while self.is_listening:
-                try:
-                    console.print("\n[bold cyan]>>> [/bold cyan]", end="")
-                    user_input = input()
-                    if user_input.strip():
-                        self.input_queue.put(user_input)
-                except Exception as e:
-                    console.print(f"[red]Error in input listener: {e}[/red]")
-                    time.sleep(1)  # Longer sleep on error
-        else:
-            # Unix-like systems can use select for non-blocking input
-            while self.is_listening:
-                try:
-                    # Check if input is available
-                    console.print("\n[bold cyan]>>> [/bold cyan]", end="")
-                    rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
-
-                    if rlist:
-                        user_input = sys.stdin.readline().strip()
-                        if user_input:
-                            self.input_queue.put(user_input)
-
-                    time.sleep(0.1)  # Small sleep to prevent high CPU usage
-                except Exception as e:
-                    console.print(f"[red]Error in input listener: {e}[/red]")
-                    time.sleep(1)  # Longer sleep on error
+        This method keeps the thread alive but doesn't actively prompt for input.
+        """
+        # This method just keeps the thread alive
+        while self.is_listening:
+            time.sleep(0.5)  # Sleep to prevent high CPU usage
 
     def check_for_input(self) -> Optional[str]:
         """
         Check if there's any user input available.
+        This checks the global user_input_buffer.
 
         Returns:
             User input string if available, None otherwise
         """
+        global user_input_buffer
         try:
-            return self.input_queue.get_nowait()
+            return user_input_buffer.get_nowait()
         except queue.Empty:
             return None
 
@@ -221,7 +201,11 @@ def process_user_input(user_input: str, context: Dict[str, Any]) -> Dict[str, An
     Returns:
         Updated context with response information
     """
-    return interaction_handler.process_input(user_input, context)
+    result = interaction_handler.process_input(user_input, context)
+
+    console.print("[dim]Processing resumed.[/dim]")
+
+    return result
 
 def register_callback(name: str, callback: Callable):
     """

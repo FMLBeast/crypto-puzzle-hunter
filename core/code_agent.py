@@ -222,6 +222,22 @@ class SafeExecutionEnvironment:
             "pathlib",
         ]
 
+    def _indent_code(self, code: str, spaces: int = 4) -> str:
+        """
+        Indent each line of code by the specified number of spaces.
+
+        Args:
+            code: The code to indent
+            spaces: Number of spaces to indent by
+
+        Returns:
+            Indented code
+        """
+        indent = " " * spaces
+        lines = code.split("\n")
+        indented_lines = [indent + line if line.strip() else line for line in lines]
+        return "\n".join(indented_lines)
+
     def _create_safe_globals(self) -> Dict[str, Any]:
         """Create a safe globals dictionary."""
         safe_builtins = {
@@ -308,7 +324,6 @@ class SafeExecutionEnvironment:
 import sys
 import os
 import signal
-import resource
 import traceback
 
 timeout = {self.max_execution_time}
@@ -317,24 +332,52 @@ memory_limit = {self.memory_limit}
 def timeout_handler(signum, frame):
     raise TimeoutError(f"Code execution timed out after {{timeout}} seconds")
 
-def check_memory_usage():
-    usage = resource.getrusage(resource.RUSAGE_SELF)
-    memory_usage = usage.ru_maxrss * 1024  # bytes
-    if memory_usage > memory_limit:
-        raise MemoryError(f"Memory usage exceeded limit: {{memory_usage}} bytes > {{memory_limit}} bytes")
-    return memory_usage
+# Try to import resource module for memory monitoring, but handle platforms where it's not available
+try:
+    import resource
+    import platform
 
-signal.signal(signal.SIGALRM, timeout_handler)
-signal.alarm(timeout)
+    def check_memory_usage():
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        # On macOS, ru_maxrss is in bytes, on Linux it's in KB
+        if platform.system() == 'Darwin':
+            memory_usage = usage.ru_maxrss
+        else:
+            memory_usage = usage.ru_maxrss * 1024  # Convert KB to bytes
 
-memory_before = check_memory_usage()
+        # Only raise error if memory usage is reasonable (avoid false positives)
+        if memory_limit > 0 and memory_usage > memory_limit and memory_usage < 10 * memory_limit:
+            raise MemoryError(f"Memory usage exceeded limit: {{memory_usage}} bytes > {{memory_limit}} bytes")
+        return memory_usage
+
+    # Initial memory check - don't enforce limit at startup
+    memory_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if platform.system() != 'Darwin':
+        memory_before *= 1024  # Convert KB to bytes
+except ImportError:
+    # resource module not available (e.g., on Windows)
+    def check_memory_usage():
+        return 0
+
+    memory_before = 0
+
+# Set up timeout handler if platform supports it
+try:
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(timeout)
+except (AttributeError, ValueError):
+    # SIGALRM not available on this platform (e.g., Windows)
+    pass
 
 __output__ = {{}}
 
 try:
-    {code}
-    memory_after = check_memory_usage()
-    __output__['memory_usage'] = memory_after - memory_before
+    {self._indent_code(code)}
+    try:
+        memory_after = check_memory_usage()
+        __output__['memory_usage'] = memory_after - memory_before
+    except:
+        __output__['memory_usage'] = 0
     __output__['success'] = True
     __output__['error'] = None
 except Exception as e:
@@ -342,7 +385,11 @@ except Exception as e:
     __output__['error'] = str(e)
     __output__['traceback'] = traceback.format_exc()
 finally:
-    signal.alarm(0)
+    try:
+        signal.alarm(0)
+    except (AttributeError, ValueError):
+        # SIGALRM not available on this platform
+        pass
 
 print("__output__ = " + repr(__output__))
 '''

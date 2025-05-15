@@ -28,6 +28,7 @@ class State:
         self.binary_data = None         # Binary content (if binary file)
         self.file_type = None           # File type (determined from extension or content)
         self.file_size = None           # File size in bytes
+        self.puzzle_type = "Unknown"    # Type of puzzle (e.g., steganography, cryptography)
         self.insights = []              # List of insights gathered during analysis
         self.transformations = []       # List of transformations applied
         self.solution = None            # Puzzle solution (if found)
@@ -94,6 +95,15 @@ class State:
         """
         self.puzzle_text = text
         self.file_size = len(text.encode("utf-8"))
+
+    def set_puzzle_type(self, puzzle_type: str) -> None:
+        """
+        Set the puzzle type.
+
+        Args:
+            puzzle_type: Type of the puzzle (e.g., steganography, cryptography)
+        """
+        self.puzzle_type = puzzle_type
 
     def set_binary_data(self, data: bytes) -> None:
         """
@@ -248,6 +258,7 @@ class State:
         summary = f"File: {self.puzzle_file or 'Not specified'}\n"
         summary += f"Type: {self.file_type or 'Unknown'}\n"
         summary += f"Size: {self.file_size or 0} bytes\n"
+        summary += f"Puzzle Type: {self.puzzle_type}\n"
         summary += f"Insights: {len(self.insights)}\n"
         summary += f"Transformations: {len(self.transformations)}\n"
         summary += f"Related files: {len(self.related_files)}\n"
@@ -275,12 +286,13 @@ class State:
 
         return summary
 
-    def get_content_sample(self, max_size: int = 1000) -> str:
+    def get_content_sample(self, max_size: int = 1000, max_binary_size: int = None) -> str:
         """
         Get a sample of the puzzle content for analysis.
 
         Args:
-            max_size: Maximum size of the sample
+            max_size: Maximum size of the sample for text content
+            max_binary_size: Maximum size for binary data (defaults to max_size/4 if None)
 
         Returns:
             Content sample
@@ -289,8 +301,18 @@ class State:
             # Text content
             return self.puzzle_text[:max_size]
         elif self.binary_data:
-            # Binary content (hex representation)
-            return self.binary_data[:max_size].hex()
+            # For binary data, use a smaller sample size to avoid context length issues
+            # Binary data becomes 2x larger when converted to hex
+            if max_binary_size is None:
+                # Default to a quarter of max_size to account for hex expansion
+                max_binary_size = max(100, max_size // 4)
+
+            # If the binary data is very large, provide a summary instead of raw hex
+            if len(self.binary_data) > 100000:  # 100KB
+                sample = self.binary_data[:max_binary_size].hex()
+                return f"Large binary file ({self.file_size} bytes). First {max_binary_size} bytes (hex): {sample}"
+            else:
+                return self.binary_data[:max_binary_size].hex()
 
         return "No content available"
 

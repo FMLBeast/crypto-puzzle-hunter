@@ -47,6 +47,16 @@ class CodingAgent:
         self.verbose = verbose
         self.fallback_mode = not CODEAGENT_AVAILABLE
 
+        # Check if we should even try to initialize LLM-dependent components
+        should_try_llm = self._should_try_llm_initialization()
+
+        if not should_try_llm:
+            logger.info("Skipping LLM initialization as API access is likely unavailable")
+            self.llm_agent = None
+            self.code_agent = None
+            self.fallback_mode = True
+            return
+
         # Initialize the crypto agent for LLM interactions
         try:
             self.llm_agent = self._initialize_llm_agent()
@@ -56,7 +66,7 @@ class CodingAgent:
             self.fallback_mode = True
 
         # Initialize the code agent if available
-        if CODEAGENT_AVAILABLE and not self.fallback_mode:
+        if CODEAGENT_AVAILABLE and not self.fallback_mode and self.llm_agent is not None:
             try:
                 self.code_agent = CodeAgent(llm_agent=self.llm_agent)
                 logger.info("CodeAgent initialized successfully")
@@ -68,6 +78,34 @@ class CodingAgent:
             self.code_agent = None
             if not CODEAGENT_AVAILABLE:
                 logger.warning("CodeAgent functionality not available")
+
+    def _should_try_llm_initialization(self) -> bool:
+        """
+        Determine if we should even attempt to initialize LLM-dependent components.
+        This prevents unnecessary API calls when it's clear no API access is available.
+
+        Returns:
+            True if we should try to initialize LLM components, False otherwise
+        """
+        # Check if API keys are set in environment or provided directly
+        if self.api_key:
+            return True
+
+        if self.provider == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
+            return True
+
+        if self.provider == "openai" and os.environ.get("OPENAI_API_KEY"):
+            return True
+
+        if self.provider == "huggingface" and os.environ.get("HUGGINGFACE_API_KEY"):
+            return True
+
+        # If we're using a local provider, we can try
+        if self.provider == "local":
+            return True
+
+        # No API keys available, don't try to initialize
+        return False
 
     def _initialize_llm_agent(self) -> Optional[CryptoAgent]:
         """
@@ -538,7 +576,8 @@ class CodingAgent:
             for name, analyzer_func in analyzers.items():
                 try:
                     logger.info(f"Running {name}...")
-                    state = analyzer_func(state)
+                    # Pass state as a keyword argument to avoid duplicate state parameter
+                    state = analyzer_func(state=state)
                 except Exception as e:
                     logger.error(f"Error in {name}: {e}")
                     state.add_insight(f"Error in {name}: {e}", analyzer="coding_agent")

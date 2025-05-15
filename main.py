@@ -167,6 +167,35 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
         console.print(f"[bold red]No files found in {folder_path}[/bold red]")
         return None
 
+    # Check for description.txt file
+    description_file = folder_path / "description.txt"
+    description_content = None
+    description_url = None
+
+    if description_file.exists() and description_file.is_file():
+        try:
+            with open(description_file, "r", encoding="utf-8") as f:
+                description_content = f.read()
+
+            # Check if there's a URL in the description
+            import re
+            url_pattern = re.compile(r'https?://\S+')
+            url_match = url_pattern.search(description_content)
+            if url_match:
+                description_url = url_match.group(0)
+
+            console.print(f"[bold green]Found description.txt file for this puzzle![/bold green]")
+            console.print(Panel.fit(
+                description_content,
+                title="Puzzle Description",
+                border_style="green"
+            ))
+
+            if description_url:
+                console.print(f"[bold cyan]Puzzle URL: {description_url}[/bold cyan]")
+        except Exception as e:
+            console.print(f"[bold red]Error reading description.txt: {e}[/bold red]")
+
     # Add all files to the state
     console.print(f"[bold]Loading all files from {folder_path} as part of the puzzle:[/bold]")
 
@@ -430,32 +459,34 @@ def process_puzzle(puzzle_path, agent, output_dir="./output", iterations=5, resu
 
 
 def display_results(state, puzzle_path):
-    """Display the analysis results."""
-    console.print("\n[bold]Analysis Results[/bold]")
+    """Display the analysis results in a structured format."""
+    console.print("\n[bold cyan]═════════════════════════════════════════[/bold cyan]")
+    console.print("[bold cyan]           ANALYSIS RESULTS           [/bold cyan]")
+    console.print("[bold cyan]═════════════════════════════════════════[/bold cyan]\n")
 
-    # Display puzzle info
-    console.print("\n[bold]Puzzle Information[/bold]")
-    info_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
-    info_table.add_column("Property")
-    info_table.add_column("Value")
+    # Display puzzle info in a panel
+    info_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
+    info_table.add_column("Property", style="cyan")
+    info_table.add_column("Value", style="green")
 
     info_table.add_row("File", str(puzzle_path))
     info_table.add_row("Type", state.file_type or "Unknown")
     info_table.add_row("Size", f"{state.file_size} bytes" if state.file_size else "Unknown")
-    info_table.add_row("Status", "Solved" if state.solution else "Unsolved")
+
+    status_style = "green" if state.solution else "yellow"
+    info_table.add_row("Status", f"[{status_style}]{'Solved' if state.solution else 'Unsolved'}[/{status_style}]")
 
     if state.solution:
-        info_table.add_row("Solution", state.solution)
+        info_table.add_row("Solution", f"[bold green]{state.solution}[/bold green]")
 
-    console.print(info_table)
+    console.print(Panel(info_table, title="[bold]Puzzle Information[/bold]", border_style="blue"))
 
-    # Display insights
-    console.print("\n[bold]Analysis Insights[/bold]")
+    # Display insights in a panel
     if state.insights:
-        insights_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
-        insights_table.add_column("Time")
-        insights_table.add_column("Analyzer")
-        insights_table.add_column("Insight")
+        insights_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
+        insights_table.add_column("Time", style="dim")
+        insights_table.add_column("Analyzer", style="cyan")
+        insights_table.add_column("Insight", style="green", no_wrap=False)
 
         for insight in state.insights:
             insights_table.add_row(
@@ -464,17 +495,16 @@ def display_results(state, puzzle_path):
                 insight.get("text", "")
             )
 
-        console.print(insights_table)
+        console.print(Panel(insights_table, title="[bold]Analysis Insights[/bold]", border_style="blue"))
     else:
-        console.print("[italic]No insights gathered.[/italic]")
+        console.print(Panel("[italic]No insights gathered.[/italic]", title="[bold]Analysis Insights[/bold]", border_style="blue"))
 
-    # Display related files
+    # Display related files in a panel if they exist
     if state.related_files:
-        console.print("\n[bold]Related Files[/bold]")
-        files_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
-        files_table.add_column("Filename")
-        files_table.add_column("Size")
-        files_table.add_column("SHA-256")
+        files_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
+        files_table.add_column("Filename", style="cyan")
+        files_table.add_column("Size", style="green")
+        files_table.add_column("SHA-256", style="dim")
 
         for filename, file_info in state.related_files.items():
             files_table.add_row(
@@ -483,54 +513,79 @@ def display_results(state, puzzle_path):
                 file_info['sha256'][:16] + "..."
             )
 
-        console.print(files_table)
+        console.print(Panel(files_table, title="[bold]Related Files[/bold]", border_style="blue"))
 
-    # Display clues
+    # Display clues in a panel if they exist
     if state.clues:
-        console.print("\n[bold]Clues[/bold]")
-        clues_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
-        clues_table.add_column("File")
-        clues_table.add_column("Text")
+        clues_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
+        clues_table.add_column("File", style="cyan")
+        clues_table.add_column("Text", style="green", no_wrap=False)
 
         for clue in state.clues:
+            clue_text = clue.get("text", "")
+            # Format long text better
+            displayed_text = clue_text if len(clue_text) <= 80 else f"{clue_text[:77]}..."
+
             clues_table.add_row(
                 clue.get("file", "N/A"),
-                clue.get("text", "")[:50] + ("..." if len(clue.get("text", "")) > 50 else "")
+                displayed_text
             )
 
-        console.print(clues_table)
+        console.print(Panel(clues_table, title="[bold]Clues[/bold]", border_style="blue"))
 
-    # Display patterns
+    # Display patterns in a panel if they exist
     if state.patterns:
-        console.print("\n[bold]Patterns from Similar Puzzles[/bold]")
-        patterns_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
-        patterns_table.add_column("Category")
-        patterns_table.add_column("File")
-        patterns_table.add_column("Description")
+        patterns_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
+        patterns_table.add_column("Category", style="cyan")
+        patterns_table.add_column("File", style="dim")
+        patterns_table.add_column("Description", style="green", no_wrap=False)
 
         for pattern in state.patterns:
+            pattern_text = pattern.get("text", "")
+            # Format long text better
+            displayed_text = pattern_text if len(pattern_text) <= 80 else f"{pattern_text[:77]}..."
+
             patterns_table.add_row(
                 pattern.get("category", "Unknown"),
                 pattern.get("file", "N/A"),
-                pattern.get("text", "")[:50] + ("..." if len(pattern.get("text", "")) > 50 else "")
+                displayed_text
             )
 
-        console.print(patterns_table)
+        console.print(Panel(patterns_table, title="[bold]Patterns from Similar Puzzles[/bold]", border_style="blue"))
 
-    # Display transformations
-    console.print("\n[bold]Transformations[/bold]")
+    # Display transformations in panels
     if state.transformations:
+        transformations_panels = []
         for i, transform in enumerate(state.transformations):
-            console.print(Panel(
-                f"[bold]{transform.get('name', 'Transformation')}[/bold]\n"
+            input_data = transform.get('input_data', '')
+            output_data = transform.get('output_data', '')
+
+            # Format input/output data for better readability
+            input_display = input_data if len(input_data) <= 100 else f"{input_data[:97]}..."
+            output_display = output_data if len(output_data) <= 100 else f"{output_data[:97]}..."
+
+            transform_panel = Panel(
+                f"[bold cyan]{transform.get('name', 'Transformation')}[/bold cyan]\n"
                 f"[italic]{transform.get('description', '')}[/italic]\n\n"
-                f"Input: {transform.get('input_data', '')[:100]}...\n"
-                f"Output: {transform.get('output_data', '')[:100]}...",
+                f"[bold]Input:[/bold] {input_display}\n\n"
+                f"[bold]Output:[/bold] {output_display}",
                 title=f"Transformation {i + 1}",
-                title_align="left"
-            ))
+                title_align="left",
+                border_style="green"
+            )
+            transformations_panels.append(transform_panel)
+
+        console.print(Panel.fit(
+            "\n".join([str(p) for p in transformations_panels]), 
+            title="[bold]Transformations[/bold]", 
+            border_style="blue"
+        ))
     else:
-        console.print("[italic]No transformations applied.[/italic]")
+        console.print(Panel("[italic]No transformations applied.[/italic]", title="[bold]Transformations[/bold]", border_style="blue"))
+
+    console.print("\n[bold cyan]═════════════════════════════════════════[/bold cyan]")
+    console.print("[bold cyan]            END OF RESULTS             [/bold cyan]")
+    console.print("[bold cyan]═════════════════════════════════════════[/bold cyan]")
 
 
 def browse_puzzle_collection(puzzles_dir, agent, results_dir, use_clues=False, verbose=False):
