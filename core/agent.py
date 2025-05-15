@@ -8,7 +8,8 @@ import textwrap
 from typing import List, Dict, Optional, Any, Union
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableSequence
-from langchain_community.chat_models import ChatOpenAI, ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatAnthropic
 from langchain_core.messages import BaseMessage
 from langchain_community.llms import HuggingFaceEndpoint
 
@@ -236,7 +237,18 @@ class CryptoAgent:
                 return result.content
             return str(result)
         except Exception as e:
-            print(f"Error sending to LLM: {e}")
+            error_str = str(e)
+            print(f"Error sending to LLM: {error_str}")
+
+            # Check for quota exceeded or rate limit errors
+            if "429" in error_str or "rate limit" in error_str.lower() or "quota" in error_str.lower():
+                print("API quota exceeded or rate limit reached. Switching to fallback mode.")
+                self.fallback_mode = True
+
+                # If this is OpenAI, provide more specific guidance
+                if self.provider == "openai":
+                    print("OpenAI API quota exceeded. Please check your billing details or try again later.")
+
             return None
 
     def analyze(self, state: State, max_iterations: int = 5) -> State:
