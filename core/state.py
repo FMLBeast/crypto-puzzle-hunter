@@ -30,6 +30,7 @@ class State:
         self.transformations = []       # List of transformations applied
         self.solution = None            # Puzzle solution (if found)
         self.related_files = {}         # Related files that are part of the puzzle
+        self.clues = []                 # Clues associated with this puzzle
         
         if puzzle_file:
             self._detect_file_type()
@@ -174,6 +175,20 @@ class State:
             "sha256": hashlib.sha256(content).hexdigest()
         }
     
+    def add_clue(self, clue_text: str, clue_file: str = None) -> None:
+        """
+        Add a clue to the puzzle.
+        
+        Args:
+            clue_text: Text of the clue
+            clue_file: Optional filename of the clue file
+        """
+        self.clues.append({
+            "text": clue_text,
+            "file": clue_file,
+            "time": time.strftime("%H:%M:%S")
+        })
+    
     def get_related_file(self, filename: str) -> Dict[str, Any]:
         """
         Get a related file by name.
@@ -208,12 +223,19 @@ class State:
         summary += f"Insights: {len(self.insights)}\n"
         summary += f"Transformations: {len(self.transformations)}\n"
         summary += f"Related files: {len(self.related_files)}\n"
+        summary += f"Clues: {len(self.clues)}\n"
         
         # Add related files list
         if self.related_files:
             summary += "Related files:\n"
             for filename, file_info in self.related_files.items():
                 summary += f"  - {filename} ({file_info['size']} bytes)\n"
+        
+        # Add clues
+        if self.clues:
+            summary += "Clues:\n"
+            for clue in self.clues:
+                summary += f"  - {clue['text'][:50]}{'...' if len(clue['text']) > 50 else ''}\n"
         
         return summary
     
@@ -255,3 +277,24 @@ class State:
                 result[filename] = file_info["text_content"]
         
         return result
+    
+    def merge_related_state(self, other_state) -> None:
+        """
+        Merge another state's related files, insights, and transformations into this state.
+        
+        Args:
+            other_state: Another State object to merge from
+        """
+        # Merge related files
+        for filename, file_info in other_state.related_files.items():
+            if filename not in self.related_files:
+                self.related_files[filename] = file_info
+        
+        # Merge insights
+        self.insights.extend(other_state.insights)
+        
+        # Merge transformations
+        self.transformations.extend(other_state.transformations)
+        
+        # Merge clues
+        self.clues.extend(other_state.clues)

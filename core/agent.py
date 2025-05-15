@@ -5,13 +5,12 @@ Handles the interaction with LLM providers and coordinates the analysis.
 import os
 import json
 import textwrap
-from typing import List, Dict, Optional, Any
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-from langchain.chat_models import ChatOpenAI, ChatAnthropic
-from langchain.schema import BaseMessage
-from langchain.llms import HuggingFaceEndpoint
-import requests
+from typing import List, Dict, Optional, Any, Union
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough, RunnableSequence
+from langchain_community.chat_models import ChatOpenAI, ChatAnthropic
+from langchain_core.messages import BaseMessage
+from langchain_community.llms import HuggingFaceEndpoint
 
 from core.state import State
 from core.prompts import (
@@ -42,6 +41,7 @@ class CryptoAgent:
         self.model = model
         self.verbose = verbose
         self.chat_history = []
+        self.fallback_mode = False
         
         # Check environment variables for API keys
         if not self.api_key:
@@ -52,6 +52,13 @@ class CryptoAgent:
             elif provider == "huggingface":
                 self.api_key = os.environ.get("HUGGINGFACE_API_KEY")
         
+        # Test API access before initializing
+        if not self._test_api_access():
+            print("API credentials unavailable or insufficient credits. Using fallback mode.")
+            self.fallback_mode = True
+            self.llm = None
+            return
+        
         # Initialize the LLM
         self.llm = self._initialize_llm()
         
@@ -60,24 +67,63 @@ class CryptoAgent:
             self.state_assessment_chain = self._create_state_assessment_chain()
             self.strategy_chain = self._create_strategy_chain()
             self.direct_solution_chain = self._create_direct_solution_chain()
-            self.fallback_mode = False
         else:
-            # No LLM available, use fallback mode
             self.fallback_mode = True
-            print("No API credits or valid credentials available. Using fallback mode.")
+            print("No LLM available. Using fallback mode.")
+    
+    def _test_api_access(self):
+        """Test if the API key is valid and has sufficient credits."""
+        if not self.api_key:
+            return False
+        
+        try:
+            if self.provider == "anthropic":
+                # Test Anthropic API
+                try:
+                    from anthropic import Anthropic
+                    client = Anthropic(api_key=self.api_key)
+                    response = client.messages.create(
+                        model="claude-3-haiku-20240307",
+                        max_tokens=10,
+                        messages=[{"role": "user", "content": "Hello"}]
+                    )
+                    return True
+                except Exception as e:
+                    error_str = str(e)
+                    if "credit balance is too low" in error_str or "invalid_request_error" in error_str:
+                        return False
+                    # Other errors might indicate network issues, etc.
+                    print(f"Anthropic API test error: {e}")
+                    return False
+            
+            elif self.provider == "openai":
+                # Test OpenAI API
+                try:
+                    from openai import OpenAI
+                    client = OpenAI(api_key=self.api_key)
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": "Hello"}],
+                        max_tokens=10
+                    )
+                    return True
+                except Exception as e:
+                    print(f"OpenAI API test error: {e}")
+                    return False
+            
+            return True  # Assume other providers are OK
+        
+        except Exception as e:
+            print(f"Error testing API access: {e}")
+            return False
     
     def _initialize_llm(self):
         """
         Initialize the LLM based on the provider.
-        Returns the LLM or None if no valid credentials/credits.
+        Returns the LLM or None if initialization fails.
         """
         try:
             if self.provider == "anthropic":
-                # Test Anthropic API access before initializing
-                if not self._test_anthropic_api():
-                    print("Anthropic API credentials unavailable or insufficient credits.")
-                    return None
-                
                 return ChatAnthropic(
                     model_name=self.model or "claude-3-opus-20240229",
                     anthropic_api_key=self.api_key,
@@ -85,11 +131,6 @@ class CryptoAgent:
                 )
             
             elif self.provider == "openai":
-                # Test OpenAI API access before initializing
-                if not self._test_openai_api():
-                    print("OpenAI API credentials unavailable or insufficient credits.")
-                    return None
-                
                 return ChatOpenAI(
                     model_name=self.model or "gpt-4o",
                     api_key=self.api_key,
@@ -117,48 +158,6 @@ class CryptoAgent:
             print(f"Error initializing LLM: {e}")
             return None
     
-    def _test_anthropic_api(self):
-        """Test if the Anthropic API key is valid and has sufficient credits."""
-        if not self.api_key:
-            return False
-        
-        try:
-            # Make a minimal API call to check access
-            from anthropic import Anthropic
-            client = Anthropic(api_key=self.api_key)
-            response = client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=10,
-                messages=[{"role": "user", "content": "Hello"}]
-            )
-            return True
-        except Exception as e:
-            error_str = str(e)
-            if "credit balance is too low" in error_str or "invalid_request_error" in error_str:
-                return False
-            # Other errors might indicate network issues, etc.
-            print(f"Anthropic API test error: {e}")
-            return False
-    
-    def _test_openai_api(self):
-        """Test if the OpenAI API key is valid and has sufficient credits."""
-        if not self.api_key:
-            return False
-        
-        try:
-            # Make a minimal API call to check access
-            from openai import OpenAI
-            client = OpenAI(api_key=self.api_key)
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hello"}],
-                max_tokens=10
-            )
-            return True
-        except Exception as e:
-            print(f"OpenAI API test error: {e}")
-            return False
-    
     def _create_state_assessment_chain(self):
         """Create the chain for assessing the puzzle state."""
         if not self.llm:
@@ -168,7 +167,9 @@ class CryptoAgent:
             input_variables=["state_summary", "transformations", "insights", "puzzle_content"],
             template=STATE_ASSESSMENT_PROMPT,
         )
-        return LLMChain(llm=self.llm, prompt=prompt, verbose=self.verbose)
+        
+        chain = prompt | self.llm
+        return chain
     
     def _create_strategy_chain(self):
         """Create the chain for selecting analysis strategies."""
@@ -179,7 +180,9 @@ class CryptoAgent:
             input_variables=["state_summary", "assessment", "transformations", "insights", "chat_history"],
             template=STRATEGY_SELECTION_PROMPT,
         )
-        return LLMChain(llm=self.llm, prompt=prompt, verbose=self.verbose)
+        
+        chain = prompt | self.llm
+        return chain
     
     def _create_direct_solution_chain(self):
         """Create the chain for attempting direct solutions."""
@@ -190,7 +193,9 @@ class CryptoAgent:
             input_variables=["state_summary", "puzzle_content"],
             template=DIRECT_SOLUTION_PROMPT,
         )
-        return LLMChain(llm=self.llm, prompt=prompt, verbose=self.verbose)
+        
+        chain = prompt | self.llm
+        return chain
     
     def _fallback_assessment(self, state):
         """
@@ -213,6 +218,28 @@ class CryptoAgent:
         """
         return FALLBACK_DIRECT_SOLUTION_TEXT
     
+    def _send_to_llm(self, prompt):
+        """
+        Safely send a prompt to the LLM.
+        
+        Args:
+            prompt: Text prompt to send
+            
+        Returns:
+            Response text or None if failed
+        """
+        if self.fallback_mode or not self.llm:
+            return None
+        
+        try:
+            result = self.llm.invoke(prompt)
+            if hasattr(result, 'content'):
+                return result.content
+            return str(result)
+        except Exception as e:
+            print(f"Error sending to LLM: {e}")
+            return None
+    
     def analyze(self, state: State, max_iterations: int = 5) -> State:
         """
         Analyze the puzzle and attempt to solve it.
@@ -224,19 +251,10 @@ class CryptoAgent:
         Returns:
             Updated puzzle state
         """
+        # Handle fallback mode
         if self.fallback_mode:
-            print("Running in fallback mode with basic analysis capabilities.")
-            
-            # Apply fallback approaches
-            state.add_insight("Using fallback analysis mode without LLM assistance.", analyzer="agent")
-            
-            # Basic assessment
-            assessment = self._fallback_assessment(state)
-            state.add_insight(f"Basic assessment: {assessment}", analyzer="agent")
-            
-            # Try common strategies
-            strategies = self._fallback_strategy(state)
-            state.add_insight(f"Suggested strategies: {strategies}", analyzer="agent")
+            print("Running in fallback mode without LLM assistance.")
+            state.add_insight("Using fallback mode (no API credits available). Running basic analyzers only.", analyzer="agent")
             
             # Run through available analyzers without LLM guidance
             from analyzers import get_all_analyzers
@@ -248,9 +266,10 @@ class CryptoAgent:
                     state = analyzer_func(state)
                 except Exception as e:
                     print(f"Error in {name}: {e}")
+                    state.add_insight(f"Error in {name}: {e}", analyzer="agent")
             
             return state
-        
+            
         # Regular mode with LLM
         iteration = 0
         previous_insights_count = 0
@@ -273,7 +292,7 @@ class CryptoAgent:
                     state.add_insight(f"Assessment: {assessment}", analyzer="agent")
                 
                 # Select a strategy
-                strategy_result = self._select_strategy(state)
+                strategy_result = self._select_strategy(state, assessment)
                 if not strategy_result:
                     print("Failed to select a strategy. Trying direct solution...")
                     self._attempt_direct_solution(state)
@@ -326,13 +345,16 @@ class CryptoAgent:
                 "insights": insights,
                 "puzzle_content": puzzle_content,
             })
-            return result.get("text", "")
+            
+            if hasattr(result, 'content'):
+                return result.content
+            return str(result)
         except Exception as e:
             print(f"Error assessing state: {e}")
             # Fall back to basic assessment if LLM fails
             return self._fallback_assessment(state)
     
-    def _select_strategy(self, state: State) -> Dict:
+    def _select_strategy(self, state: State, assessment: str) -> Dict:
         """
         Select the next analysis strategy based on the current state.
         """
@@ -340,12 +362,11 @@ class CryptoAgent:
             return {"strategy": self._fallback_strategy(state), "analyzer": "text_analyzer", "params": {}}
         
         state_summary = state.get_summary()
-        assessment = self._assess_state(state)
         transformations = json.dumps(state.transformations, indent=2)
         insights = json.dumps(state.insights, indent=2)
         
         try:
-            strategy_result = self.strategy_chain.invoke({
+            result = self.strategy_chain.invoke({
                 "state_summary": state_summary,
                 "assessment": assessment,
                 "transformations": transformations,
@@ -353,15 +374,25 @@ class CryptoAgent:
                 "chat_history": self.chat_history,
             })
             
-            # Parse the strategy result
-            strategy_text = strategy_result.get("text", "")
+            strategy_text = ""
+            if hasattr(result, 'content'):
+                strategy_text = result.content
+            else:
+                strategy_text = str(result)
+            
             self.chat_history.append({"role": "assistant", "content": strategy_text})
             
             try:
                 # Extract JSON from the text
-                json_part = strategy_text.split("```json")[1].split("```")[0].strip()
+                json_part = strategy_text
+                if "```json" in strategy_text:
+                    json_part = strategy_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in strategy_text:
+                    json_part = strategy_text.split("```")[1].strip()
+                
                 return json.loads(json_part)
-            except:
+            except Exception as json_err:
+                print(f"Error parsing strategy JSON: {json_err}")
                 # Try to create a simple strategy if JSON parsing fails
                 return {
                     "strategy": "Basic analysis",
@@ -391,7 +422,12 @@ class CryptoAgent:
                 "puzzle_content": puzzle_content,
             })
             
-            solution_text = result.get("text", "")
+            solution_text = ""
+            if hasattr(result, 'content'):
+                solution_text = result.content
+            else:
+                solution_text = str(result)
+                
             state.add_insight(f"Direct solution attempt: {solution_text}", analyzer="agent")
             
             # Try to extract a solution

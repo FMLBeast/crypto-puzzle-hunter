@@ -1,27 +1,12 @@
 """
-Crypto Hunter - Analyzers Module
-
-This package contains the analyzers for various cryptographic puzzles.
+Analyzers module for Crypto Hunter.
 """
 
-# Load all analyzers
-from analyzers.base import (
-    register_analyzer,
-    analyzer_compatibility,
-    get_all_analyzers,
-    get_analyzer,
-    run_analyzer,
-    load_all_analyzers,
-)
+from analyzers.base import register_analyzer, analyzer_compatibility, get_analyzer, get_all_analyzers
+from analyzers.text_analyzer import analyze_text
+from analyzers.binary_analyzer import analyze_binary
+from analyzers.cipher_analyzer import analyze_ciphers
+from analyzers.encoding_analyzer import analyze_encodings
+from analyzers.image_analyzer import analyze_image
 
-# Import individual analyzers
-# These imports ensure all analyzers are registered
-import analyzers.binary_analyzer
-import analyzers.blockchain_analyzer
-import analyzers.cipher_analyzer
-import analyzers.encoding_analyzer
-import analyzers.image_analyzer
-import analyzers.text_analyzer
-
-# Initialize all analyzers
-load_all_analyzers()
+# Import additional analyzers as they are added
