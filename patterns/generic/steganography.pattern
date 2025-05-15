@@ -1,0 +1,87 @@
+This pattern describes steganography techniques commonly used in cryptographic puzzles, including real-world examples from CTF competitions, online cryptography communities, and blockchain projects.
+
+Steganography is the practice of concealing messages or information within other non-secret text or data. Unlike encryption, which makes data unreadable, steganography hides the existence of the message.
+
+Common characteristics:
+1. Files that seem normal but contain hidden data (images, audio, text)
+2. Unusual artifacts or patterns in media files
+3. Files that are larger than expected for their content
+4. Hints about "hidden" or "concealed" information
+5. Multi-layered puzzles combining steganography with encoding or encryption
+
+Common steganography techniques:
+1. Image Steganography:
+   - Least Significant Bit (LSB) encoding in image pixels
+   - Metadata/EXIF data hiding
+   - Color palette manipulation
+   - Image layer manipulation
+   - Appended data after image EOF marker
+
+2. Audio Steganography:
+   - Spectrogram images/text (visible in frequency domain)
+   - LSB encoding in audio samples
+   - Echo hiding
+   - Phase coding
+   - Embedded data in audio frames
+
+3. Text Steganography:
+   - Zero-width character insertion (using invisible Unicode characters)
+   - Whitespace steganography (spaces/tabs encoding bits)
+   - First letter of each line/paragraph forming a message
+   - Homoglyph substitution (using similar-looking characters)
+
+4. File Format Tricks:
+   - Polyglot files (valid as multiple file types)
+   - Embedded files within other files (e.g., ZIP inside JPEG)
+   - Comment fields in various formats
+
+Solution approaches:
+1. Initial Analysis:
+   - Check file type and metadata (file, exiftool)
+   - Look for unusual file size or entropy
+   - Examine strings and visible patterns
+
+2. Image Analysis:
+   - Extract and analyze metadata (exiftool)
+   - Check LSB data (zsteg, stegsolve)
+   - Look for hidden text in color channels
+   - Try steghide or outguess for JPEG files
+
+3. Audio Analysis:
+   - View spectrogram (Audacity, Sonic Visualizer)
+   - Extract LSB data from samples
+   - Check for hidden text in audio frames
+
+4. Text Analysis:
+   - Check for zero-width characters
+   - Analyze whitespace patterns
+   - Look for patterns in first/last letters
+
+5. Binary Analysis:
+   - Use binwalk to find embedded files
+   - Check for data after EOF markers
+   - Look for file signatures within files
+
+6. Password Recovery:
+   - Use stegseek or similar tools for password-protected stego
+   - Try common passwords or hints from the challenge
+
+Real-world examples:
+1. PicoCTF 2022 "St3g0" - Flag hidden in PNG image LSB data, extractable with zsteg
+2. PicoCTF 2025 "RED" - Base64-encoded data hidden in PNG LSB, requiring two-step extraction
+3. DownUnderCTF 2020 "On the Spectrum" - Flag visible in audio spectrogram
+4. X-MAS CTF 2020 "Peculiar Gifts" - Steghide-protected data in JPEGs requiring password guessing
+5. Cicada 3301 (2012) - OutGuess steganography in JPEG revealing hidden text
+6. Arweave Crypto Puzzle #11 - Ethereum private key hidden in image using multiple techniques
+7. Necrum Labs "Zipper" - ZIP file appended to JPEG containing the flag
+8. DEADFACE CTF 2023 "Sneaky Static" - Second MP4 video hidden inside first video
+9. HeroCTF 2024 "Indonesian Zero Width" - Message encoded in zero-width Unicode characters
+10. Various CTFs - Text hidden in LSB of audio samples
+
+Tools for steganography analysis:
+1. General: binwalk, strings, hexdump, file, exiftool
+2. Image: zsteg, stegsolve, steghide, outguess, openstego
+3. Audio: Audacity, Sonic Visualizer, Spectrum Analyzer
+4. Password cracking: stegseek, stegcracker
+5. Text: Unicode analyzers, whitespace analyzers
+6. Custom scripts for specific techniques

@@ -1,0 +1,21 @@
+This pattern describes common techniques and themes used in the Arweave11 puzzle series.
+
+The Arweave11 series is known for combining multiple cryptographic techniques and often includes references to blockchain technology and decentralized storage.
+
+Common characteristics:
+1. Multi-layered puzzles that require solving several steps
+2. References to Arweave blockchain concepts and terminology
+3. Often includes steganography in combination with traditional ciphers
+4. May contain wallet addresses or transaction hashes as keys or clues
+
+Solution approaches:
+1. Look for blockchain-related information first (addresses, hashes, block numbers)
+2. Check for steganography in images, especially in logos or diagrams
+3. Pay attention to file metadata and hidden comments in HTML/code
+4. Consider the possibility of multiple encryption layers
+
+Examples from previous puzzles in the series:
+- In "Arweave11 Challenge 1", the key was derived from a specific block height
+- "Bodhi's Puzzle" contained a message hidden in HTML comments that needed to be decoded with a key from the image
+- The "Permaweb Puzzle" used the first letters of each paragraph to form an Arweave wallet address
+- In "Arweave11 Challenge 3", the solution required finding a transaction ID hidden in the image and using it as a Vigenère key

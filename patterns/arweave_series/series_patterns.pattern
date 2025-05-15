@@ -1,0 +1,35 @@
+This pattern describes the Arweave Puzzle Series, including common techniques and orchestrated solution approaches.
+
+The Arweave Puzzle Series consists of multiple puzzle weaves (Puzzle Weave 1, 2, 4, 8, 13, etc.) that combine various cryptographic techniques, mathematical problems, and blockchain-related challenges.
+
+Common characteristics:
+1. Multi-layered puzzles requiring solving several steps
+2. Combination of mathematical riddles, cryptographic challenges, and blockchain concepts
+3. References to Arweave blockchain technology and terminology
+4. May include hidden data in images, HTML, or transaction payloads
+5. Often requires cross-referencing information from multiple sources
+
+Solution approaches:
+1. Algebra Module: Set up and solve linear systems automatically
+2. Brute-Force Timer: Script loops over timestamps to detect patterns
+3. Riddle Lookup: Store classic riddle-answer pairs for quick retrieval
+4. Coordinate Calculation: Compute and format geographic coordinates
+5. Vision API: Analyze images to extract spatial data or hidden information
+6. Arweave Fetch: Automate HTTP calls to pull transaction data
+7. Toolchain Wrapper: Invoke forensics tools programmatically
+8. Steganalysis Library: Detect hidden content in files
+9. Decryption Module: Attempt decryption with metadata-derived keys
+10. Linear Program Solver: Solve inequality-bound problems
+11. Combinatorics Function: Calculate probabilities with combinatorial formulas
+12. Knowledge Graph Query: Connect to domain-specific information graphs
+13. Timeline API: Match dates with historical events
+14. LLM-Agent Loop: Combine text analysis with API calls
+15. File-Type Router: Detect MIME types and dispatch to appropriate analysis pipelines
+
+Examples from the series:
+- Puzzle Weave 1: Solving algebraic equations (Sam + Kyle = total; Sam - Kyle = difference)
+- Puzzle Weave 1: Finding the 99th beep in a countdown-beep pattern at 10:01
+- Puzzle Weave 2: Extracting hidden archives or steganographic content from Arweave transaction data
+- Puzzle Weave 4: Setting up inequalities to find minimum shares in an AR-Distribution riddle
+- Puzzle Weave 8: Cross-referencing biographical hints and historical events
+- Puzzle Weave 13: Analyzing on-chain data with appropriate tools based on file type

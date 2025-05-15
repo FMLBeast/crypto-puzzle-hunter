@@ -1,0 +1,18 @@
+This pattern describes the Vigenère cipher technique commonly used in cryptographic puzzles.
+
+The Vigenère cipher is a method of encrypting alphabetic text by using a simple form of polyalphabetic substitution. A Vigenère cipher uses a keyword to shift each letter of the plaintext by different amounts.
+
+Common characteristics:
+1. Text appears to be a substitution cipher but frequency analysis doesn't work well
+2. Often has a repeating pattern of character frequencies
+3. May contain hints about a "key" or "keyword"
+
+Solution approach:
+1. Try to determine the key length using techniques like the Kasiski examination or Index of Coincidence
+2. Once the key length is known, perform frequency analysis on each position
+3. Use the key to decrypt the message by shifting each letter back
+
+Examples from other puzzles:
+- In the "Mysterious Message" puzzle, the key was hidden in the puzzle title
+- In the "Ancient Scroll" series, the key was often a relevant historical figure's name
+- The "Cryptic Challenge 2023" used a Vigenère cipher with a key derived from the puzzle number
