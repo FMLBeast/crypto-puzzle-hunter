@@ -95,6 +95,16 @@ python main.py --puzzle-file path/to/your/puzzle.txt --analyzer text_analyzer
 python main.py --puzzle-file path/to/your/puzzle.txt --use-clues
 ```
 
+### Real-Time Solution Process
+
+Crypto Hunter now provides real-time visibility into the solution process, allowing you to follow along with what the solution is doing as it happens. As the analysis progresses, you'll see:
+
+- Insights as they are discovered
+- Transformations as they are applied
+- The solution when it is found
+
+This feature is enabled by default and works with all analysis modes. Use the `--verbose` flag for even more detailed information.
+
 ### Browsing and Selecting Puzzles
 
 ```bash
@@ -209,6 +219,30 @@ Analysis Insights
 └────────────┴────────────────┴──────────────────────────────────────────┘
 ```
 
+#### Advanced Steganography Analysis
+
+Crypto Hunter supports multiple LSB steganography analysis techniques:
+
+```bash
+# Specify a particular LSB analysis technique
+python main.py --puzzle-file examples/steganography/hidden_message.png --analyzer image_analyzer --params '{"technique": "rgb"}'
+
+# Available techniques:
+# - "all": Use all available techniques (default)
+# - "rgb": Standard RGB LSB extraction (all channels combined)
+# - "channel": Per-channel LSB extraction (Red, Green, Blue separately)
+# - "plane": Bit plane extraction (analyzing specific bit positions across pixels)
+```
+
+The enhanced LSB steganography analysis includes:
+
+- **Comprehensive Analysis**: Automatically adapts to image size, analyzing the entire image for smaller files and using targeted sampling for larger images
+- **Region-Specific Analysis**: For large images, automatically checks specific regions (corners and center) where steganographic data is often hidden
+- **Channel-Specific Analysis**: Extracts and analyzes LSBs from individual color channels to detect channel-specific hiding techniques
+- **Bit Plane Analysis**: Examines specific bit positions across all pixels to detect more sophisticated steganography methods
+- **Advanced Pattern Detection**: Identifies patterns in extracted data and attempts to decode as text, encoded data, or cryptocurrency addresses
+- **Support for Multiple Image Types**: Works with RGB, RGBA, grayscale, and grayscale with alpha channel images
+
 ## 🛠️ Advanced Usage
 
 ### Using the API
@@ -218,6 +252,10 @@ You can use Crypto Hunter as a library in your own projects:
 ```python
 from core.state import State
 from core.agent import CryptoAgent
+from core.logger import solution_logger
+
+# Initialize the solution logger with verbose mode if desired
+solution_logger.__init__(verbose=True)
 
 # Initialize the state with a puzzle file
 state = State(puzzle_file="path/to/puzzle.txt")
@@ -233,6 +271,10 @@ if final_state.solution:
     print(f"Solution found: {final_state.solution}")
 else:
     print("No solution found")
+
+# You can also access all logged insights and transformations
+insights = solution_logger.get_insights()
+transformations = solution_logger.get_transformations()
 ```
 
 ### Custom Analyzers
@@ -252,16 +294,16 @@ def analyze_custom(state: State) -> State:
     """
     if not state.puzzle_text:
         return state
-    
+
     # Your analysis logic here
     text = state.puzzle_text
-    
+
     # Add insights
     state.add_insight(
         "Found something interesting!",
         analyzer="my_custom_analyzer"
     )
-    
+
     # Add transformations
     state.add_transformation(
         name="my_transformation",
@@ -270,7 +312,7 @@ def analyze_custom(state: State) -> State:
         output_data="transformed text",
         analyzer="my_custom_analyzer"
     )
-    
+
     return state
 ```
 
@@ -289,7 +331,10 @@ Then register it in `analyzers/__init__.py`.
   - Cryptographic protocol puzzles
 
 - **Steganography**
-  - Image-based steganography (LSB)
+  - Image-based steganography (LSB) with multiple analysis techniques
+  - Bit plane analysis
+  - Region-specific steganography detection
+  - Channel-specific analysis (RGB, grayscale)
   - Metadata analysis
   - Text-based hidden data
 

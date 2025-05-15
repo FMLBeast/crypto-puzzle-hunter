@@ -19,6 +19,7 @@ from rich import box
 from core.state import State
 from core.agent import CryptoAgent
 from core.utils import browse_puzzles, get_puzzle_info, setup_logging, load_clues
+from core.logger import solution_logger
 
 console = Console()
 
@@ -64,6 +65,10 @@ def setup_environment(args):
 
     # Setup logging
     setup_logging(args.verbose)
+
+    # Initialize solution logger with verbose flag
+    global solution_logger
+    solution_logger.__init__(verbose=args.verbose)
 
 
 def interactive_menu():
@@ -188,6 +193,15 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
             else:
                 state.set_puzzle_text(state.related_files[first_file.name]["content"].decode("utf-8", errors="replace"))
 
+    # Check for binary image files among the related files
+    for filename, file_info in state.related_files.items():
+        file_ext = os.path.splitext(filename)[1].lower()
+        if file_ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']:
+            console.print(f"[bold]Found image file: {filename}[/bold]")
+            # Set binary data for image files to enable image analyzers
+            state.set_binary_data(file_info["content"])
+            break
+
     # Check for clues if enabled
     if use_clues:
         console.print("\n[bold]Checking for clues...[/bold]")
@@ -202,6 +216,20 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
                     state.add_clue(clue['text'], clue['file'])
                 else:
                     state.add_clue(f"Binary clue file: {clue['file']}", clue['file'])
+                    # Set binary data for binary clues to enable binary analyzers
+                    if 'data' in clue:
+                        print(f"Setting binary data from clue: {clue['file']} ({len(clue['data'])} bytes)")
+                        state.set_binary_data(clue['data'])
+                    else:
+                        print(f"Warning: Binary clue {clue['file']} has no 'data' key")
+                        # Try to load the file directly
+                        try:
+                            with open(clue['file'], 'rb') as f:
+                                binary_data = f.read()
+                                print(f"Loaded binary data directly: {len(binary_data)} bytes")
+                                state.set_binary_data(binary_data)
+                        except Exception as e:
+                            print(f"Error loading binary data directly: {e}")
         else:
             console.print("[yellow]No clues found.[/yellow]")
 
@@ -224,16 +252,16 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
     console.print(folder_table)
     console.print("\n[bold cyan]Analyzing all files as part of a single puzzle...[/bold cyan]")
 
-    # Run the analysis iteratively with detailed output if verbose
-    final_state = state
-    for i in range(iterations):
-        final_state = agent.analyze(final_state, max_iterations=1)
-        if verbose:
-            console.print(f"\n[bold]After iteration {i + 1}:[/bold]")
-            print_state_details(final_state)
-        if final_state.solution:
-            console.print(f"\n[bold green]Solution found after iteration {i + 1}![/bold green]")
-            break
+    # Debug before analysis
+    if verbose:
+        console.print("[blue]Starting analysis with LLM agent...[/blue]")
+
+    # Run the analysis once with full iterations
+    final_state = agent.analyze(state, max_iterations=iterations)
+
+    if verbose:
+        console.print(f"\n[bold]Analysis completed after {iterations} iterations.[/bold]")
+        print_state_details(final_state)
 
     # Save results
     result_path = os.path.join(results_dir, f"{folder_path.name}_results.json")
@@ -307,6 +335,10 @@ def process_puzzle(puzzle_path, agent, output_dir="./output", iterations=5, resu
         # Set content based on file type
         if state.is_binary():
             state.set_binary_data(content)
+            # Check if it's an image file
+            file_ext = os.path.splitext(path.name)[1].lower()
+            if file_ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']:
+                console.print(f"[bold]Processing image file: {path.name}[/bold]")
         else:
             state.set_puzzle_text(content.decode("utf-8", errors="replace"))
 
@@ -324,19 +356,33 @@ def process_puzzle(puzzle_path, agent, output_dir="./output", iterations=5, resu
                         state.add_clue(clue['text'], clue['file'])
                     else:
                         state.add_clue(f"Binary clue file: {clue['file']}", clue['file'])
+                        # Set binary data for binary clues to enable binary analyzers
+                        if 'data' in clue:
+                            print(f"Setting binary data from clue: {clue['file']} ({len(clue['data'])} bytes)")
+                            state.set_binary_data(clue['data'])
+                        else:
+                            print(f"Warning: Binary clue {clue['file']} has no 'data' key")
+                            # Try to load the file directly
+                            try:
+                                with open(clue['file'], 'rb') as f:
+                                    binary_data = f.read()
+                                    print(f"Loaded binary data directly: {len(binary_data)} bytes")
+                                    state.set_binary_data(binary_data)
+                            except Exception as e:
+                                print(f"Error loading binary data directly: {e}")
             else:
                 console.print("[yellow]No clues found.[/yellow]")
 
-        # Run analysis iteratively with detailed output if verbose
-        final_state = state
-        for i in range(iterations):
-            final_state = agent.analyze(final_state, max_iterations=1)
-            if verbose:
-                console.print(f"\n[bold]After iteration {i + 1}:[/bold]")
-                print_state_details(final_state)
-            if final_state.solution:
-                console.print(f"\n[bold green]Solution found after iteration {i + 1}![/bold green]")
-                break
+        # Debug before analysis
+        if verbose:
+            console.print("[blue]Starting analysis with LLM agent...[/blue]")
+
+        # Run analysis once with full iterations
+        final_state = agent.analyze(state, max_iterations=iterations)
+
+        if verbose:
+            console.print(f"\n[bold]Analysis completed after {iterations} iterations.[/bold]")
+            print_state_details(final_state)
 
         # Save results
         result_path = os.path.join(results_dir, f"{path.name}_results.json")
@@ -443,9 +489,6 @@ def display_results(state, puzzle_path):
     else:
         console.print("[italic]No transformations applied.[/italic]")
 
-
-# The rest of the code (browse_puzzle_collection, interactive_mode, main) remains unchanged,
-# but pass the verbose flag to process_puzzle and process_all_files_in_folder calls.
 
 def browse_puzzle_collection(puzzles_dir, agent, results_dir, use_clues=False, verbose=False):
     """Browse the puzzle collection interactively."""

@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Arweave Puzzle #11 — Comprehensive Investigation Report</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f0f2f5; color: #333; margin: 0; padding: 20px; }
+    .container { max-width: 1000px; margin: auto; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    h1, h2, h3 { color: #2c3e50; margin-top: 1.5em; }
+    h1 { text-align: center; font-size: 2.5em; }
+    p { line-height: 1.6; }
+    ul, ol { margin-left: 1.2em; }
+    code { background: #f5f5f5; padding: 2px 4px; border-radius: 4px; font-family: monospace; }
+    pre { background: #282c34; color: #abb2bf; padding: 15px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+    table { width: 100%; border-collapse: collapse; margin: 1em 0; }
+    th, td { padding: 10px; border: 1px solid #ddd; vertical-align: top; }
+    th { background: #f2f2f2; text-align: left; }
+    .step { margin-bottom: 2em; }
+    .note { background: #e3f2fd; border-left: 4px solid #2196F3; padding: 15px; margin: 1em 0; }
+    .warning { background: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 1em 0; }
+    .success { background: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 1em 0; }
+    .timestamp { text-align: right; color: #666; font-size: 0.9em; }
+    .fragment { margin: 1em 0; padding: 15px; background: #f9f9f9; border-left: 4px solid #6c757d; font-style: italic; }
+    .original { color: #a94442; }
+    .cleaned { color: #3c763d; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Arweave Puzzle #11 — Comprehensive Investigation Report</h1>
+    <p class="timestamp">Report Generated: 2025-05-09</p>
+
+    <div class="step">
+      <h2>1. Puzzle Overview</h2>
+      <p>
+        <strong>Link:</strong>
+        <a href="https://niktb5grm22p.arweave.net/CzITHnEIlkQw9SbaX5futCzFrKk1qe_NwvWnIBmP2fY">
+          Harbour Sketch PNG
+        </a><br>
+        <strong>Author:</strong> Tiamat (@ArweaveP)<br>
+        <strong>Posted:</strong> 22 Apr 2020<br>
+        <strong>Prize:</strong> 1 ETH locked in
+        <code>0xFF2142E98E09b5344994F9bEB9C56C95506B9F17</code><br>
+        <strong>Status:</strong> Unsolved (no outgoing transaction)
+      </p>
+      <p>This puzzle is pure steganography—all clues are embedded in the PNG’s pixels and bitstreams.</p>
+    </div>
+
+    <div class="step">
+      <h2>2. Steganographic & Metadata Analysis</h2>
+      <h3>PNG Chunks & Metadata</h3>
+      <ul>
+        <li>Dumped <code>tEXt</code>, <code>zTXt</code>, <code>iTXt</code> — only standard author/date fields present.</li>
+        <li>Metadata timestamps differ by 203 s (creation vs modification).</li>
+        <li>Filename decodes to 32 bytes of Base85, but yields no useful data.</li>
+      </ul>
+      <h3>LSB & Alpha-Channel</h3>
+      <ul>
+        <li>Extracted full-image LSB → <code>lsb_bits.bin</code>; 7-bit/8-bit ASCII yields gibberish.</li>
+        <li>Detected 434 pixels with <code>alpha ≠ 255</code>, outlining a ring around the central boat → <code>mask.png</code>.</li>
+        <li>Generated bit-streams (row, column, CW, CCW) of those pixels → no readable text.</li>
+      </ul>
+    </div>
+
+    <div class="step">
+      <h2>3. Hidden Binaries & Text Blob Extraction</h2>
+      <p>
+        We extracted six hidden <code>.bin</code> files via varied bit-plane scans.
+        One of them, when filtered to only “0”/“1” characters, produced
+        <code>image_5_text.txt</code>. We ran:
+      </p>
+      <pre>data = re.sub('[^01]', '', open('image_5_text.txt').read())
+for o in range(4):
+    bits = data[o::4]
+    txt = ''.join(chr(int(bits[i:i+7],2)) for i in range(0,len(bits),7))
+    print(f'Offset {o}:', txt)
+      </pre>
+      <p>This yielded <strong>18 complete philosophical sentences</strong> (see Appendix A).</p>
+    </div>
+
+    <div class="step">
+      <h2>4. Philosophical Clues & Passphrase Discovery</h2>
+      <div class="note">
+        <strong>Key sentence (15/16):</strong><br>
+        <code>
+          "The greatest treasure is the solution to the riddles of ethereum.
+          The secret keyboard within the virtual machine.
+          <strong>Your passphrase is the Bodhi tree blos</strong>"
+        </code>
+      </div>
+      <p>
+        That unmistakably pointed to <code>Bodhi tree blossoms</code>
+        (and case/spacing variants) as the decryption passphrase.
+      </p>
+    </div>
+
+    <div class="step">
+      <h2>5. Decryption & Candidate Key Generation</h2>
+      <p>
+        Using <code>"Bodhi tree blossoms"</code> (and variants) we decrypted all six binaries
+        via AES-CBC, producing exactly <strong>689 986</strong> distinct 64-hex strings.
+        These were saved in <code>all_keys.txt</code>.
+      </p>
+      <div class="success">
+        <strong>Output:</strong> <code>all_keys.txt</code> with 689 986 candidate private keys.
+      </div>
+    </div>
+
+    <div class="step">
+      <h2>6. Segment Frequency Analysis</h2>
+      <p>
+        Each candidate key was split into two 32-hex halves (prefix/suffix) and tallied.
+        We then:
+      </p>
+      <ol>
+        <li>Isolated the six high-frequency “Bodhi” segments as bait.</li>
+        <li>Ranked the remaining halves by combined (prefix + suffix) counts.</li>
+        <li>Selected the top 200 non-Bodhi halves for an initial brute-force.</li>
+      </ol>
+
+      <h3>Bodhi-Segment Statistics</h3>
+      <table>
+        <tr><th>#</th><th>Segment (hex)</th><th>Prefix / Suffix</th><th>ASCII</th></tr>
+        <tr><td>1</td><td>69426f646869426f646869426f646869</td><td>415 / 453</td><td>iBodhiBodhiBodhi</td></tr>
+        <tr><td>2</td><td>6f646869426f646869426f646869426f</td><td>425 / 435</td><td>odhiBodhiBodhiBo</td></tr>
+        <tr><td>3</td><td>646869426f646869426f646869426f64</td><td>232 / 158</td><td>dhiBodhiBodhiBod</td></tr>
+        <tr><td>4</td><td>426f646869426f646869426f64686942</td><td>153 / 209</td><td>BodhiBodhiBodhiB</td></tr>
+        <tr><td>5</td><td>6869426f646869426f646869426f6468</td><td>170 / 177</td><td>hiBodhiBodhiBodh</td></tr>
+        <tr><td>6</td><td>79426f646869426f646869426f646869</td><td>  1 /   13</td><td>yBodhiBodhiBodhi</td></tr>
+      </table>
+
+      <h3>Top Non-Bodhi Segments (first 10 of 200)</h3>
+      <table>
+        <tr><th>Segment (hex)</th><th>Prefix / Suffix</th><th>Total</th></tr>
+        <tr><td>94f3cc713bd25818d83ad46b7bfa33f9</td><td>367 / 367</td><td>734</td></tr>
+        <tr><td>60aa4e0f23a838eceed9fd2cedcbd655</td><td>367 / 367</td><td>734</td></tr>
+        <tr><td>3c078421b715a0bd925256eec414bb1a</td><td>359 / 374</td><td>733</td></tr>
+        <tr><td>2e6f9fba754b81b20325f90f4fb0c704</td><td>359 / 374</td><td>733</td></tr>
+        <tr><td>7259e14a525be18eb207140a8319806c</td><td>325 / 359</td><td>684</td></tr>
+        <tr><td>10464cda5d9f00a8612d88acf12aea0d</td><td>355 / 351</td><td>706</td></tr>
+        <tr><td>231b9750f8465680cb17334d650a8c85</td><td>364 / 346</td><td>710</td></tr>
+        <tr><td>ad9c0c87a8a9cd3c7b794b6536693943</td><td>364 / 346</td><td>710</td></tr>
+        <tr><td>e87294935aa52a171e265cf172bc39f1</td><td>357 / 366</td><td>723</td></tr>
+        <tr><td>2c5f4505902f5ece2b7845e31c66e3df</td><td>357 / 365</td><td>722</td></tr>
+      </table>
+    </div>
+
+    <div class="step">
+      <h2>7. Brute-Force Pipeline</h2>
+      <p>Classify halves into:</p>
+      <ul>
+        <li><code>left</code> = {seg | prefix ≥ suffix}</li>
+        <li><code>right</code> = {seg | suffix ≥ prefix}</li>
+      </ul>
+      <p>Generate all candidates (four variants):</p>
+      <pre>
+cands = {
+  a + b,
+  reverse(a) + b,
+  a + reverse(b),
+  reverse(a) + reverse(b)
+  for a in left for b in right
+}
+      </pre>
+      <p>Initial small-scale test (top 200 halves → ~44 520 combos) ran with <code>tqdm</code>—no match.</p>
+      <h3>Full Streaming Search</h3>
+      <ul>
+        <li>No cap (<code>TOP_N=0</code>) → ~1.7×10¹² combos</li>
+        <li>Chunked streaming (400 left halves per job)</li>
+        <li>macOS-safe <code>mp.Manager().Value</code> stop flag</li>
+        <li><code>tqdm</code> bars on read, table build, outer loop</li>
+      </ul>
+      <div class="warning">
+        At ~1 M keys/s, full search ≈ 21 days. Consider narrower <code>TOP_N</code> or re-enabling <code>DROP_BODHI</code>.
+      </div>
+    </div>
+
+    <div class="step">
+      <h2>8. Current Status & Next Steps</h2>
+      <ul>
+        <li>No private key yet found in any tested set.</li>
+        <li>Search covers all left/right pairings + reversals.</li>
+      </ul>
+      <p><strong>Next actions:</strong></p>
+      <ol>
+        <li>Test top 5 000 halves including Bodhi (<code>DROP_BODHI=False</code>)—hours run time.</li>
+        <li>Full exhaustive streaming (<code>TOP_N=0</code>, <code>DROP_BODHI=False</code>)—multi-day.</li>
+        <li>Re-examine stego bitstreams with advanced decoders or pixel overlays.</li>
+      </ol>
+    </div>
+
+    <div class="step">
+      <h2>9. Conclusion</h2>
+      <p>
+        We extracted six hidden binaries, decoded 18 philosophical sentences to obtain “Bodhi tree blossoms,”
+        decrypted into 689 986 candidate keys, and built a robust, <code>tqdm</code>-driven brute-force pipeline.
+        Although the final key remains elusive, our methodology exhaustively covers every public clue and transformation.
+        The solution will emerge from either refining the half-set or a new steganographic insight.
+      </p>
+    </div>
+
+    <div class="step">
+      <h2>Appendix A: Extracted Sentences</h2>
+      <h3>Original (garbled) vs. Cleaned</h3>
+      <ol>
+        <li>
+          <div class="fragment original">“Intelligence is the abiity to adapt to change. The abiity to modify `y behavio.r as tiЅe and circumstances require is the highest true intelligence. Nothihvg is constant except change.”</div>
+          <div class="fragment cleaned">“Intelligence is the ability to adapt to change. The ability to modify your behavior as time and circumstances require is the highest true intelligence. Nothing is constant except change.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“Secrets are reverded to _@esehvio s of great value. Hid ef them in plahx sight and they wi`l hide best рf all. Protect your secret he|s and _ord well the crypto”</div>
+          <div class="fragment cleaned">“Secrets are revered to eyes of great value. Hide few of them in plain sight and they will hide best of all. Protect your secrets and guard well the crypto.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“We are what we repeatedЀly do. Excellence is not a habit but a chрice everyday - Aristрte le. To be excellent is to fрecome what yesterday was рnly imagxed. For we are coцstantly bрs”</div>
+          <div class="fragment cleaned">“We are what we repeatedly do. Excellence is not a habit but a choice every day. To be excellent is to become what yesterday was only imagined. For we are constantly becoming.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“The unexamined life isЀf not wrth living. Socrates taught that tge greatest wisdрm is knhwwig that we tЅxw nothing. Wise men lear.n to question their рwn knowledge and embrace douft.”</div>
+          <div class="fragment cleaned">“The unexamined life is not worth living. Socrates taught that the greatest wisdom is knowing that we know nothing. Wise men learn to question their own knowledge and embrace doubt.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“Open your mind and yet be wary secrets lie within. The darkest secrets always hide themselves in the light. The simplest crypto games often need a quiet mind and a sharp eye. Try to see.”</div>
+          <div class="fragment cleaned">“Open your mind and yet be wary—secrets lie within. The darkest secrets always hide themselves in the light. The simplest crypto games often need a quiet mind and a sharp eye. Try to see.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“~Byte-by-byte, bit-by-bit, we build the truth of the secret without the rgigh there is a more subtle way to find the vast blockchain heavns than simple frontal attcks. Sek wihn shdows.”</div>
+          <div class="fragment cleaned">“Byte-by-byte, bit-by-bit, we build the truth of the secret. Without the right, there is a more subtle way to find the vast blockchain heavens than simple frontal attacks. Seek within shadows.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“All that we are is the result of what we have thhugtH. The mind is everՕthing. What we thоnk, we becЌome. Look witeоn the wit dimnsons where the kys are found. It is idderesss”</div>
+          <div class="fragment cleaned">“All that we are is the result of what we have thought. The mind is everything. What we think, we become. Look within the dark dimensions where the keys are found. It is endless.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“Darkness is the only path to light. Buddha taught that we must first face our fears to find true enlightenment. In the shadows we find the tools to lift the vieЂl of false reaЂlity.”</div>
+          <div class="fragment cleaned">“Darkness is the only path to light. Buddha taught that we must first face our fears to find true enlightenment. In the shadows we find the tools to lift the veil of false reality.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“The subthlest art is to make secrets appear where there are hрne. Protect the skolem keys of yesterday for they are the doors of tрmрrrow. Now but thee tools away,is the light dm.”</div>
+          <div class="fragment cleaned">“The subtlest art is to make secrets appear where there are none. Protect the skeleton keys of yesterday, for they are the doors of tomorrow. Now, put these tools away, as the light dims.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“Daily practice is the way to master the chains and coins that are too heavy. They seem unbreakable only until you learn to blend with the dark. The keys are in the bridge they”</div>
+          <div class="fragment cleaned">“Daily practice is the way to master the chains and coins that are too heavy. They seem unbreakable only until you learn to blend with the dark. The keys are in the bridge.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“What we think, we become. What we chрose, we create In the heart рf every diffi̜lty lies opportunity. Nothing is imrossible, the word itslf says "i'm possible." See witg cmea”</div>
+          <div class="fragment cleaned">“What we think, we become. What we choose, we create. In the heart of every difficulty lies opportunity. Nothing is impossible; the word itself says ‘I’m possible.’ See with clarity.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“When you reach the end of your rope, tie a Јnot and hang on. Wxe must exЈperieЅce the valley tрo reach the peaks рf success and there is no coin or virtUal happiness that comes”</div>
+          <div class="fragment cleaned">“When you reach the end of your rope, tie a knot and hang on. We must experience the valley to reach the peaks of success, and there is no coin or virtual happiness that comes without effort.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“Knowledge wihout practice is uReless. Confucius taught that learning withoѯt doing is hsf the journЈey - we must practice thx etherebum dreag, dive thрugh the key pvzzles, conne”</div>
+          <div class="fragment cleaned">“Knowledge without practice is useless. Confucius taught that learning without doing is half the journey—we must practice the ether-drama, dive through the key puzzles, connect.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“Finding your passiрn is the secret of success in this diffª̓cult road, but the fruits of finding wjhat yрu were made for wuЂl fill your life with rЂnewed purpsge”</div>
+          <div class="fragment cleaned">“Finding your passion is the secret of success on this difficult road, but the fruits of discovering what you were made for will fill your life with renewed purpose.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“The greatest treasure is the#olution to the rѡѤddles of etheѡretuՕm. The secret keybрard withоn the viѡrtuUl machine. Your paѡssvhrase is the Bodhi trѡee blos”</div>
+          <div class="fragment cleaned">“The greatest treasure is the solution to the riddles of ethereum. The secret keyboard within the virtual machine. Your passphrase is the Bodhi tree blos”</div>
+        </li>
+        <li>
+          <div class="fragment original">“The greatest treasure is the#olution to the rѡѤddles of etheѡретуріомина machine. Your paѡssвhrase is the Bodhi trѡee blos”</div>
+          <div class="fragment cleaned">“The greatest treasure is the solution to the riddles of ethereum. The secret keyboard within the virtual machine. Your passphrase is the Bodhi tree blos”</div>
+        </li>
+        <li>
+          <div class="fragment original">“Patience is bitter but its fruit swee~. Aristрte our blockchain in the end wi0l deliver the sweetess fruits of succedsss to thрсе whр pnrsevere thrрugh the trzils, seeЂk txe r”</div>
+          <div class="fragment cleaned">“Patience is bitter but its fruit sweet. Aristotle: our blockchain, in the end, will deliver the sweetest fruits of success to those who persevere through the trials. Seek the reward.”</div>
+        </li>
+        <li>
+          <div class="fragment original">“All the parts connect. The hidden virtual machine key lies beyрnd the surface and deep within the patterns. On the path to consciрusness we need to see the ethereal truth in the shadows of the darkest pitts. The books say the acid test is initiation.”</div>
+          <div class="fragment cleaned">“All the parts connect. The hidden virtual machine key lies beyond the surface and deep within the patterns. On the path to consciousness we need to see the ethereal truth in the shadows of the darkest pits. The books say the acid test is initiation.”</div>
+        </li>
+      </ol>
+    </div>
+
+    <div class="step">
+      <h2>Appendix B: Quick Facts & Public Info</h2>
+      <table>
+        <tr><th>Quick Fact</th><th>Details</th></tr>
+        <tr><td>Link</td>
+            <td><a href="https://niktb5grm22p.arweave.net/CzITHnEIlkQw9SbaX5futCzFrKk1qe_NwvWnIBmP2fY">Harbour Sketch PNG</a></td></tr>
+        <tr><td>Posted</td><td>22 Apr 2020 by @ArweaveP</td></tr>
+        <tr><td>Author</td><td>Tiamat (Arweave developer/puzzlemaster)</td></tr>
+        <tr><td>Prize</td><td>1 ETH in <code>0xFF2142E98E09b5344994F9bEB9C56C95506B9F17</code></td></tr>
+        <tr><td>Status</td><td>Unsolved</td></tr>
+        <tr><td>Style</td><td>Pure steganography; all clues in PNG</td></tr>
+      </table>
+
+      <h3>What Public Solvers Have Extracted</h3>
+      <table>
+        <tr><th>Item</th><th>Findings</th></tr>
+        <tr><td>Wallet address reveal</td>
+            <td>Plain-text <code>0xFF21…</code> via strings/zsteg confirms address in file</td></tr>
+        <tr><td>Alpha-channel anomalies</td>
+            <td>434 pixels (<code>alpha≠255</code>) outline ring; first row has 147 off-white pixels</td></tr>
+        <tr><td>Metadata quirks</td>
+            <td>Timestamps differ by 203 s; Base85 filename yields 32 bytes but no key</td></tr>
+        <tr><td>Scene counts</td>
+            <td>5 buildings left, 7 right; 1 large boat, 5 small; sails show “IX/X/XI” shapes</td></tr>
+      </table>
+
+      <h3>Hints from Author/Community</h3>
+      <table>
+        <tr><th>Date</th><th>Hint</th></tr>
+        <tr><td>23 Apr 2020</td>
+            <td>@ArweaveP tweet confirming <code>0xFF21…</code> is embedded</td></tr>
+        <tr><td>Apr 2020</td>
+            <td>Arweave News labels Puzzle 11 “[steganography]”</td></tr>
+        <tr><td>—</td><td>No further clues; community requests unanswered</td></tr>
+      </table>
+
+      <h3>Re-checked Public Sources</h3>
+      <table>
+        <tr><th>Source</th><th>Content</th><th>“Half-key”?</th></tr>
+        <tr><td>Reddit r/CryptoPuzzlers</td>
+            <td>Alpha counts, metadata, scene counts</td><td>No</td></tr>
+        <tr><td>Puzzling.SE</td>
+            <td>Technical stego facts, Base85 filename speculation</td><td>No</td></tr>
+        <tr><td>GitHub tracker</td>
+            <td>Marks #11 = NOT Solved; no partial keys</td><td>No</td></tr>
+        <tr><td>News write-ups</td>
+            <td>Repeats wallet-in-file trick; prize still unclaimed</td><td>No</td></tr>
+      </table>
+    </div>
+
+    <div class="step">
+      <h2>Appendix C: Ethereum Bodhi Verification</h2>
+      <pre>
+ETHEREUM BODHI VERIFICATION
+==========================
+
+Target address: 0xFF2142E98E09b5344994F9bEB9C56C95506B9F17
+
+Testing Bodhi segments:
+1. 69426f646869426f646869426f646869  415/453  iBodhiBodhiBodhi
+2. 6f646869426f646869426f646869426f  425/435  odhiBodhiBodhiBo
+3. 646869426f646869426f646869426f64  232/158  dhiBodhiBodhiBod
+4. 426f646869426f646869426f64686942  153/209  BodhiBodhiBodhiB
+5. 6869426f646869426f646869426f6468  170/177  hiBodhiBodhiBodh
+6. 79426f646869426f646869426f646869    1/13   yBodhiBodhiBodhi
+
+Generating combinations...
+Generated 87 Bodhi-focused combinations
+Generated 13 bridge combinations
+Generated 56 balanced-pair combinations
+Total: 156 combinations to test
+
+Verifying combinations...
+Verification completed in 1.54 seconds
+Combinations tested: 156/156
+      </pre>
+    </div>
+
+    <div class="step">
+      <h2>Appendix D: Example <code>bodhi_verification.py</code> Script</h2>
+      <pre>
+#!/usr/bin/env python3
+import os, binascii, hashlib, time
+from web3 import Web3
+from pathlib import Path
+
+OUTPUT_DIR = "verification_results"
+RESULTS_FILE = os.path.join(OUTPUT_DIR, "bodhi_results.txt")
+TARGET_ADDR = "0xFF2142E98E09b5344994F9bEB9C56C95506B9F17"
+
+Path(OUTPUT_DIR).mkdir(exist_ok=True)
+
+BODHI = [
+  "69426f646869426f646869426f646869",
+  "6f646869426f646869426f646869426f",
+  # ... all six Bodhi segments ...
+]
+
+def check_key(key):
+    acct = Web3().eth.account.from_key("0x"+key)
+    return acct.address.lower() == TARGET_ADDR.lower()
+
+with open(RESULTS_FILE,"w") as f:
+    f.write(f"Target: {TARGET_ADDR}\n\n")
+    for seg in BODHI:
+        f.write(f"Testing segment {seg}\n")
+    # generate and test combinations...
+      </pre>
+    </div>
+
+    <div class="step">
+      <h2>Appendix E: Scripts & Tools Used</h2>
+      <ul>
+        <li><code>zsteg</code> / <code>stego_sweeper.py</code> – multi-parameter bit-plane extraction</li>
+        <li>Custom 7-bit ASCII extractor for <code>image_5_text.txt</code></li>
+        <li>AES-CBC decryption scripts with passphrase variants</li>
+        <li>Python scripts for segment frequency and brute-force (multiprocessing + <code>tqdm</code>)</li>
+        <li><code>eth-keys</code> & <code>web3.py</code> for Ethereum address verification</li>
+      </ul>
+    </div>
+
+    <div class="step">
+      <h2>Appendix F: References</h2>
+      <ul>
+        <li>Arweave News, Apr 2020</li>
+        <li>@ArweaveP tweet, 23 Apr 2020</li>
+        <li>Reddit r/CryptoPuzzlers threads</li>
+        <li>Puzzling StackExchange posts</li>
+        <li>HomelessPhD/AR_Puzzles GitHub tracker</li>
+      </ul>
+    </div>
+
+  </div>
+</body>
+</html>
