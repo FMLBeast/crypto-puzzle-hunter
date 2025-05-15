@@ -243,6 +243,15 @@ class CryptoAgent:
         """
         Analyze the puzzle and attempt to solve it.
 
+        The analysis process includes multiple strategies:
+        1. Using LLM to assess the state and select appropriate analyzers
+        2. Executing selected analyzers to gain insights
+        3. Using code-based analysis when other approaches fail or get stuck
+        4. Attempting direct solution as a last resort
+
+        When the system is stuck (no new insights) or can't find the right tool,
+        it will generate and execute Python code to solve the puzzle.
+
         Args:
             state: The current puzzle state
             max_iterations: Maximum number of analysis iterations
