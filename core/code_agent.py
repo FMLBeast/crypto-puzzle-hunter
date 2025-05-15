@@ -3,90 +3,91 @@ CodeAgent for Crypto Hunter.
 An agent capable of writing and executing its own code to solve puzzles.
 """
 
-import os
-import sys
+import ast
 import importlib
 import inspect
-import re
-import traceback
-import ast
-import logging
-import tempfile
 import json
+import logging
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
 import uuid
-from typing import List, Dict, Any, Optional, Union, Callable
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Union
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class DynamicToolRegistry:
     """Registry for dynamically created tools."""
-    def __init__(self, tools_dir="./dynamic_tools"):
+
+    def __init__(self, tools_dir: Union[str, Path] = "./dynamic_tools") -> None:
         """
         Initialize the tool registry.
-        
+
         Args:
             tools_dir: Directory to store dynamically created tools
         """
         self.tools_dir = Path(tools_dir)
         self.tools_dir.mkdir(exist_ok=True)
-        
+
         # Create __init__.py if it doesn't exist
         init_file = self.tools_dir / "__init__.py"
         if not init_file.exists():
             init_file.write_text("# Dynamic tools registry")
-        
-        # Dictionary to store tool information
-        self.tools = {}
-        
-        # Load existing tools
+
+        self.tools: Dict[str, Dict[str, Any]] = {}
         self._load_existing_tools()
-    
-    def _load_existing_tools(self):
+
+    def _load_existing_tools(self) -> None:
         """Load existing tools from the tools directory."""
         for py_file in self.tools_dir.glob("*.py"):
-            if py_file.name != "__init__.py":
-                try:
-                    module_name = py_file.stem
-                    spec = importlib.util.spec_from_file_location(
-                        f"dynamic_tools.{module_name}", 
-                        py_file
-                    )
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-                    
-                    # Find functions in the module
-                    for name, obj in inspect.getmembers(module):
-                        if inspect.isfunction(obj) and hasattr(obj, '_is_dynamic_tool'):
-                            tool_id = getattr(obj, '_tool_id', name)
-                            self.tools[tool_id] = {
-                                'function': obj,
-                                'name': name,
-                                'description': getattr(obj, '_description', ''),
-                                'module': module_name,
-                                'file_path': py_file,
-                                'code': inspect.getsource(obj)
-                            }
-                            logger.info(f"Loaded dynamic tool: {name}")
-                except Exception as e:
-                    logger.error(f"Error loading tool from {py_file}: {e}")
-    
-    def register_tool(self, code: str, name: str = None, description: str = "") -> str:
+            if py_file.name == "__init__.py":
+                continue
+            try:
+                module_name = py_file.stem
+                spec = importlib.util.spec_from_file_location(
+                    f"dynamic_tools.{module_name}", py_file
+                )
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)  # type: ignore
+
+                for name, obj in inspect.getmembers(module):
+                    if inspect.isfunction(obj) and hasattr(obj, "_is_dynamic_tool"):
+                        tool_id = getattr(obj, "_tool_id", name)
+                        self.tools[tool_id] = {
+                            "function": obj,
+                            "name": name,
+                            "description": getattr(obj, "_description", ""),
+                            "module": module_name,
+                            "file_path": py_file,
+                            "code": inspect.getsource(obj),
+                        }
+                        logger.info(f"Loaded dynamic tool: {name}")
+            except Exception as e:
+                logger.error(f"Error loading tool from {py_file}: {e}")
+
+    def register_tool(
+        self, code: str, name: Optional[str] = None, description: str = ""
+    ) -> Optional[str]:
         """
         Register a new tool from code.
-        
+
         Args:
             code: Python code for the tool
             name: Optional name for the tool (extracted from code if not provided)
             description: Optional description of the tool
-            
+
         Returns:
             Tool ID if successful, None otherwise
         """
         try:
-            # Parse the code to extract the function name if not provided
             if not name:
                 try:
                     tree = ast.parse(code)
@@ -94,22 +95,18 @@ class DynamicToolRegistry:
                         if isinstance(node, ast.FunctionDef):
                             name = node.name
                             break
-                except:
-                    # If parsing fails, generate a random name
+                except Exception:
                     name = f"dynamic_tool_{uuid.uuid4().hex[:8]}"
-            
-            # Make sure the name is valid
-            name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-            
-            # Generate a unique ID
+
+            # Sanitize name
+            name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+
             tool_id = f"{name}_{uuid.uuid4().hex[:8]}"
-            
-            # Create a new file for the tool
             module_name = f"tool_{uuid.uuid4().hex[:8]}"
             file_path = self.tools_dir / f"{module_name}.py"
-            
-            # Add decorators to mark as a dynamic tool
-            tool_code = f"""
+
+            # Prepare tool code with decorator
+            tool_code = f'''
 # Dynamic tool generated by CodeAgent
 # Description: {description}
 
@@ -121,111 +118,86 @@ def _register_dynamic_tool(func):
 
 @_register_dynamic_tool
 {code}
-"""
-            # Write the code to file
+'''
+
             file_path.write_text(tool_code)
-            
-            # Import the new module
+
             spec = importlib.util.spec_from_file_location(
-                f"dynamic_tools.{module_name}", 
-                file_path
+                f"dynamic_tools.{module_name}", file_path
             )
             module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            
-            # Find the function in the module
+            spec.loader.exec_module(module)  # type: ignore
+
             function = None
-            for obj_name, obj in inspect.getmembers(module):
-                if inspect.isfunction(obj) and hasattr(obj, '_is_dynamic_tool'):
+            for _, obj in inspect.getmembers(module):
+                if inspect.isfunction(obj) and hasattr(obj, "_is_dynamic_tool"):
                     function = obj
                     break
-            
+
             if function:
-                # Store the tool
                 self.tools[tool_id] = {
-                    'function': function,
-                    'name': name,
-                    'description': description,
-                    'module': module_name,
-                    'file_path': file_path,
-                    'code': code
+                    "function": function,
+                    "name": name,
+                    "description": description,
+                    "module": module_name,
+                    "file_path": file_path,
+                    "code": code,
                 }
                 logger.info(f"Registered dynamic tool: {name} (ID: {tool_id})")
                 return tool_id
-            else:
-                logger.error(f"Failed to find function in dynamic module")
-                return None
-        
+
+            logger.error("Failed to find function in dynamic module")
+            return None
+
         except Exception as e:
             logger.error(f"Error registering tool: {e}")
             return None
-    
+
     def get_tool(self, tool_id: str) -> Optional[Callable]:
-        """
-        Get a tool by ID.
-        
-        Args:
-            tool_id: ID of the tool
-            
-        Returns:
-            Tool function if found, None otherwise
-        """
-        if tool_id in self.tools:
-            return self.tools[tool_id]['function']
-        return None
-    
+        """Get a tool by ID."""
+        return self.tools.get(tool_id, {}).get("function")
+
     def list_tools(self) -> List[Dict[str, Any]]:
-        """
-        List all registered tools.
-        
-        Returns:
-            List of tool information
-        """
+        """List all registered tools."""
         return [
             {
-                'id': tool_id,
-                'name': info['name'],
-                'description': info['description'],
-                'module': info['module']
+                "id": tool_id,
+                "name": info["name"],
+                "description": info["description"],
+                "module": info["module"],
             }
             for tool_id, info in self.tools.items()
         ]
-    
+
     def remove_tool(self, tool_id: str) -> bool:
-        """
-        Remove a tool by ID.
-        
-        Args:
-            tool_id: ID of the tool
-            
-        Returns:
-            True if removed, False otherwise
-        """
-        if tool_id in self.tools:
-            tool_info = self.tools[tool_id]
-            try:
-                # Delete the file
-                os.remove(tool_info['file_path'])
-                # Remove from registry
-                del self.tools[tool_id]
-                logger.info(f"Removed dynamic tool: {tool_info['name']} (ID: {tool_id})")
-                return True
-            except Exception as e:
-                logger.error(f"Error removing tool {tool_id}: {e}")
-                return False
-        return False
+        """Remove a tool by ID."""
+        if tool_id not in self.tools:
+            return False
+        tool_info = self.tools[tool_id]
+        try:
+            os.remove(tool_info["file_path"])
+            del self.tools[tool_id]
+            logger.info(f"Removed dynamic tool: {tool_info['name']} (ID: {tool_id})")
+            return True
+        except Exception as e:
+            logger.error(f"Error removing tool {tool_id}: {e}")
+            return False
+
 
 class SafeExecutionEnvironment:
     """
     Provides a safe environment for executing generated code.
     """
-    def __init__(self, 
-                 allowed_modules=None, 
-                 max_execution_time=10,
-                 memory_limit=100 * 1024 * 1024):  # 100 MB
+
+    def __init__(
+        self,
+        allowed_modules: Optional[List[str]] = None,
+        max_execution_time: int = 10,
+        memory_limit: int = 100 * 1024 * 1024,
+    ) -> None:
         """
         Initialize the safe execution environment.
-        
+
         Args:
             allowed_modules: List of allowed modules (None for default safe set)
             max_execution_time: Maximum execution time in seconds
@@ -233,231 +205,207 @@ class SafeExecutionEnvironment:
         """
         self.max_execution_time = max_execution_time
         self.memory_limit = memory_limit
-        
-        # Default set of allowed modules
         self.allowed_modules = allowed_modules or [
-            "re", "math", "string", "datetime", "collections", 
-            "itertools", "functools", "operator", "json",
-            "base64", "binascii", "hashlib", "os.path", "pathlib"
+            "re",
+            "math",
+            "string",
+            "datetime",
+            "collections",
+            "itertools",
+            "functools",
+            "operator",
+            "json",
+            "base64",
+            "binascii",
+            "hashlib",
+            "os.path",
+            "pathlib",
         ]
-    
-    def _create_safe_globals(self):
+
+    def _create_safe_globals(self) -> Dict[str, Any]:
         """Create a safe globals dictionary."""
-        safe_globals = {
-            "__builtins__": {
-                # Safe builtins
-                "abs": abs, "all": all, "any": any, "bin": bin,
-                "bool": bool, "bytearray": bytearray, "bytes": bytes,
-                "chr": chr, "complex": complex, "dict": dict,
-                "divmod": divmod, "enumerate": enumerate, "filter": filter,
-                "float": float, "format": format, "frozenset": frozenset,
-                "hash": hash, "hex": hex, "int": int,
-                "isinstance": isinstance, "issubclass": issubclass,
-                "iter": iter, "len": len, "list": list,
-                "map": map, "max": max, "min": min,
-                "next": next, "oct": oct, "ord": ord,
-                "pow": pow, "print": print, "range": range,
-                "repr": repr, "reversed": reversed, "round": round,
-                "set": set, "slice": slice, "sorted": sorted,
-                "str": str, "sum": sum, "tuple": tuple,
-                "type": type, "zip": zip
-            }
+        safe_builtins = {
+            "abs": abs,
+            "all": all,
+            "any": any,
+            "bin": bin,
+            "bool": bool,
+            "bytearray": bytearray,
+            "bytes": bytes,
+            "chr": chr,
+            "complex": complex,
+            "dict": dict,
+            "divmod": divmod,
+            "enumerate": enumerate,
+            "filter": filter,
+            "float": float,
+            "format": format,
+            "frozenset": frozenset,
+            "hash": hash,
+            "hex": hex,
+            "int": int,
+            "isinstance": isinstance,
+            "issubclass": issubclass,
+            "iter": iter,
+            "len": len,
+            "list": list,
+            "map": map,
+            "max": max,
+            "min": min,
+            "next": next,
+            "oct": oct,
+            "ord": ord,
+            "pow": pow,
+            "print": print,
+            "range": range,
+            "repr": repr,
+            "reversed": reversed,
+            "round": round,
+            "set": set,
+            "slice": slice,
+            "sorted": sorted,
+            "str": str,
+            "sum": sum,
+            "tuple": tuple,
+            "type": type,
+            "zip": zip,
         }
-        
-        # Import allowed modules
+
+        safe_globals = {"__builtins__": safe_builtins}
+
         for module_name in self.allowed_modules:
             try:
                 if "." in module_name:
-                    # Handle submodules
                     parts = module_name.split(".")
-                    base_module = importlib.import_module(parts[0])
-                    module = base_module
+                    module = importlib.import_module(parts[0])
                     for part in parts[1:]:
                         module = getattr(module, part)
                 else:
                     module = importlib.import_module(module_name)
-                
                 safe_globals[module_name.split(".")[-1]] = module
             except ImportError:
                 logger.warning(f"Failed to import allowed module: {module_name}")
-        
+
         return safe_globals
-    
-    def execute(self, code: str, inputs: Dict[str, Any] = None) -> Dict[str, Any]:
+
+    def execute(self, code: str, inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute code in a safe environment.
-        
+
         Args:
             code: Python code to execute
             inputs: Optional dictionary of input variables
-            
+
         Returns:
             Dictionary containing execution result
         """
-        # Create a temporary file for the code
-        with tempfile.NamedTemporaryFile(suffix='.py', delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as temp_file:
             temp_file_path = temp_file.name
-            temp_file.write(code.encode('utf-8'))
-        
+
         try:
-            # Create safe globals
-            safe_globals = self._create_safe_globals()
-            
-            # Add inputs to globals
-            if inputs:
-                for key, value in inputs.items():
-                    safe_globals[key] = value
-            
-            # Add a dictionary to capture outputs
-            safe_globals['__output__'] = {}
-            
-            # Create custom exec function with a timeout
-            exec_with_timeout = """
-def exec_with_timeout(code, globals_dict, locals_dict=None):
-    import signal
-    import sys
-    
-    def timeout_handler(signum, frame):
-        raise TimeoutError(f"Code execution timed out after {timeout} seconds")
-    
-    # Set the timeout
-    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(timeout)
-    
-    try:
-        # Execute the code
-        exec(code, globals_dict, locals_dict)
-    finally:
-        # Reset the alarm
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
-"""
-            
-            # Add memory monitoring
-            memory_monitor = """
-def check_memory_usage():
-    import resource
-    import os
-    
-    # Get memory usage
-    usage = resource.getrusage(resource.RUSAGE_SELF)
-    memory_usage = usage.ru_maxrss * 1024  # Convert to bytes
-    
-    if memory_usage > memory_limit:
-        raise MemoryError(f"Memory usage exceeded limit: {memory_usage} bytes > {memory_limit} bytes")
-    
-    return memory_usage
-"""
-            
-            # Combine the code
-            wrapper_code = f"""
-# Safety wrapper
+            # Prepare wrapper code with safety checks
+            wrapper_code = f'''
 import sys
 import os
+import signal
+import resource
+import traceback
 
-# Define limits
 timeout = {self.max_execution_time}
 memory_limit = {self.memory_limit}
 
-{exec_with_timeout}
-{memory_monitor}
+def timeout_handler(signum, frame):
+    raise TimeoutError(f"Code execution timed out after {{timeout}} seconds")
 
-# Add memory check at the beginning
+def check_memory_usage():
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    memory_usage = usage.ru_maxrss * 1024  # bytes
+    if memory_usage > memory_limit:
+        raise MemoryError(f"Memory usage exceeded limit: {{memory_usage}} bytes > {{memory_limit}} bytes")
+    return memory_usage
+
+signal.signal(signal.SIGALRM, timeout_handler)
+signal.alarm(timeout)
+
 memory_before = check_memory_usage()
 
-# Execute the user code
+__output__ = {{}}
+
 try:
-    user_code = '''
-{code}
-'''
-    exec_with_timeout(user_code, globals())
-    
-    # Add memory check after execution
+    {code}
     memory_after = check_memory_usage()
     __output__['memory_usage'] = memory_after - memory_before
     __output__['success'] = True
     __output__['error'] = None
 except Exception as e:
-    import traceback
     __output__['success'] = False
     __output__['error'] = str(e)
     __output__['traceback'] = traceback.format_exc()
-"""
-            
-            # Write the wrapper code to the temporary file
-            with open(temp_file_path, 'w') as f:
+finally:
+    signal.alarm(0)
+
+print("__output__ = " + repr(__output__))
+'''
+
+            with open(temp_file_path, "w", encoding="utf-8") as f:
                 f.write(wrapper_code)
-            
-            # Execute the code in a subprocess for isolation
-            import subprocess
-            
-            # Prepare environment variables
+
             env = os.environ.copy()
-            
-            # Execute the code
+
             process = subprocess.run(
                 [sys.executable, temp_file_path],
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=self.max_execution_time + 2  # Add a small buffer
+                timeout=self.max_execution_time + 2,
             )
-            
-            # Get the output
+
             if process.returncode != 0:
                 return {
-                    'success': False,
-                    'error': f"Process exited with code {process.returncode}",
-                    'stdout': process.stdout,
-                    'stderr': process.stderr
+                    "success": False,
+                    "error": f"Process exited with code {process.returncode}",
+                    "stdout": process.stdout,
+                    "stderr": process.stderr,
                 }
-            
-            # Try to extract the output dictionary from stdout using regex
-            output_match = re.search(r'__output__\s*=\s*(\{.*\})', process.stdout, re.DOTALL)
+
+            # Extract __output__ dict from stdout
+            output_match = re.search(r"__output__\s*=\s*(\{.*\})", process.stdout, re.DOTALL)
             if output_match:
                 try:
                     output_dict = eval(output_match.group(1), {"__builtins__": {}})
                     return output_dict
-                except:
-                    pass
-            
-            # If we can't extract the output dictionary, return the stdout and stderr
-            return {
-                'success': True,
-                'stdout': process.stdout,
-                'stderr': process.stderr
-            }
-        
+                except Exception as e:
+                    logger.error(f"Failed to parse output dict: {e}")
+
+            # Fallback: return stdout and stderr
+            return {"success": True, "stdout": process.stdout, "stderr": process.stderr}
+
         except subprocess.TimeoutExpired:
-            return {
-                'success': False,
-                'error': f"Execution timed out after {self.max_execution_time} seconds"
-            }
+            return {"success": False, "error": f"Execution timed out after {self.max_execution_time} seconds"}
         except Exception as e:
-            return {
-                'success': False,
-                'error': str(e),
-                'traceback': traceback.format_exc()
-            }
+            return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
         finally:
-            # Clean up the temporary file
             try:
                 os.unlink(temp_file_path)
-            except:
+            except Exception:
                 pass
+
 
 class CodeAgent:
     """
     Agent capable of writing and executing its own code to solve puzzles.
     """
-    def __init__(self, 
-                 llm_agent=None,
-                 tools_dir="./dynamic_tools",
-                 max_execution_time=10,
-                 memory_limit=100 * 1024 * 1024):
+
+    def __init__(
+        self,
+        llm_agent: Optional[Any] = None,
+        tools_dir: Union[str, Path] = "./dynamic_tools",
+        max_execution_time: int = 10,
+        memory_limit: int = 100 * 1024 * 1024,
+    ) -> None:
         """
         Initialize the CodeAgent.
-        
+
         Args:
             llm_agent: LLM agent for code generation
             tools_dir: Directory to store dynamically created tools
@@ -467,36 +415,34 @@ class CodeAgent:
         self.llm_agent = llm_agent
         self.tool_registry = DynamicToolRegistry(tools_dir)
         self.execution_env = SafeExecutionEnvironment(
-            max_execution_time=max_execution_time,
-            memory_limit=memory_limit
+            max_execution_time=max_execution_time, memory_limit=memory_limit
         )
-        self.code_history = []
-    
-    def generate_code(self, task_description: str, state=None, 
-                      required_outputs=None) -> str:
+        self.code_history: List[Dict[str, Any]] = []
+
+    def generate_code(
+        self,
+        task_description: str,
+        state: Optional[Any] = None,
+        required_outputs: Optional[List[str]] = None,
+    ) -> str:
         """
         Generate code for a specific task.
-        
+
         Args:
             task_description: Description of the task
             state: Current puzzle state (if available)
             required_outputs: List of required output variables
-            
+
         Returns:
             Generated code
         """
-        if not self.llm_agent or self.llm_agent.fallback_mode:
-            # Fallback approach - provide template code for common tasks
+        if not self.llm_agent or getattr(self.llm_agent, "fallback_mode", False):
             return self._generate_fallback_code(task_description, required_outputs)
-        
-        # Prepare prompt for the LLM
+
         state_summary = state.get_summary() if state else "No state provided"
-        
-        # Create list of available tools for reference
         available_tools = self.tool_registry.list_tools()
         tools_summary = json.dumps(available_tools, indent=2) if available_tools else "No tools available"
-        
-        # Formulate the prompt
+
         prompt = f"""
 You are an expert Python programmer tasked with writing code to solve a cryptographic puzzle.
 
@@ -522,208 +468,185 @@ Requirements:
 
 Write only the Python function without any additional explanation.
 """
-        
+
         if required_outputs:
             prompt += f"\nThe function must return a dictionary with the following keys: {', '.join(required_outputs)}"
-        
+
         try:
-            # Use the LLM agent to generate code
             result = self.llm_agent._send_to_llm(prompt)
-            
-            # Extract code from the response if it's wrapped in a code block
-            code_match = re.search(r'```(?:python)?\s*(.*?)\s*```', result, re.DOTALL)
-            if code_match:
-                code = code_match.group(1)
-            else:
-                code = result
-            
-            # Store in history
-            self.code_history.append({
-                "task": task_description,
-                "code": code,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-            })
-            
+            code_match = re.search(r"```(?:python)?\s*(.*?)\s*```", result, re.DOTALL)
+            code = code_match.group(1) if code_match else result
+
+            self.code_history.append(
+                {"task": task_description, "code": code, "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")}
+            )
             return code
-        
+
         except Exception as e:
             logger.error(f"Error generating code: {e}")
             return self._generate_fallback_code(task_description, required_outputs)
-    
-    def _generate_fallback_code(self, task_description: str, 
-                               required_outputs=None) -> str:
+
+    def _generate_fallback_code(self, task_description: str, required_outputs: Optional[List[str]] = None) -> str:
         """
         Generate fallback code templates for common tasks.
-        
+
         Args:
             task_description: Description of the task
             required_outputs: List of required output variables
-            
+
         Returns:
             Template code
         """
-        # Extract keywords from the task
         task_lower = task_description.lower()
-        
-        # Check for common cryptographic tasks
+
         if any(word in task_lower for word in ["base64", "encode", "decode"]):
             return self._template_base64_tool(required_outputs)
-        elif any(word in task_lower for word in ["xor", "cipher"]):
+        if any(word in task_lower for word in ["xor", "cipher"]):
             return self._template_xor_tool(required_outputs)
-        elif any(word in task_lower for word in ["caesar", "rot", "shift"]):
+        if any(word in task_lower for word in ["caesar", "rot", "shift"]):
             return self._template_caesar_tool(required_outputs)
-        elif any(word in task_lower for word in ["hash", "sha", "md5"]):
+        if any(word in task_lower for word in ["hash", "sha", "md5"]):
             return self._template_hash_tool(required_outputs)
-        elif any(word in task_lower for word in ["frequency", "analysis", "letter"]):
+        if any(word in task_lower for word in ["frequency", "analysis", "letter"]):
             return self._template_frequency_analysis_tool(required_outputs)
-        else:
-            # Generic analysis template
-            return self._template_generic_analysis_tool(required_outputs)
-    
-    def _template_base64_tool(self, required_outputs=None) -> str:
+        return self._template_generic_analysis_tool(required_outputs)
+
+    def _template_base64_tool(self, required_outputs: Optional[List[str]] = None) -> str:
         """Create a template for base64 encoding/decoding."""
-        return """
+        return '''
 def base64_tool(data: str, mode: str = "decode") -> dict:
     """
     Encode or decode data using Base64.
-    
+
     Args:
         data: The data to encode or decode
         mode: 'encode' or 'decode'
-        
+
     Returns:
         Dictionary with the results
     """
     import base64
-    
+
     result = {}
-    
+
     try:
         if mode.lower() == "encode":
-            # Encode the data to Base64
             encoded = base64.b64encode(data.encode('utf-8')).decode('utf-8')
             result['encoded'] = encoded
             result['success'] = True
         else:
-            # Decode the data from Base64
             decoded = base64.b64decode(data).decode('utf-8')
             result['decoded'] = decoded
             result['success'] = True
     except Exception as e:
         result['success'] = False
         result['error'] = str(e)
-    
+
     return result
-"""
-    
-    def _template_xor_tool(self, required_outputs=None) -> str:
+'''
+
+    def _template_xor_tool(self, required_outputs: Optional[List[str]] = None) -> str:
         """Create a template for XOR cipher."""
-        return """
+        return '''
 def xor_cipher(data: str, key: str) -> dict:
     """
     Apply XOR cipher to the data using the given key.
-    
+
     Args:
         data: The data to encrypt/decrypt
         key: The encryption key
-        
+
     Returns:
         Dictionary with the results
     """
     result = {}
-    
+
     try:
-        # Convert data and key to bytes
         data_bytes = data.encode('utf-8')
         key_bytes = key.encode('utf-8')
-        
-        # Apply XOR with key cycling
+
         output_bytes = bytearray()
         for i in range(len(data_bytes)):
             output_bytes.append(data_bytes[i] ^ key_bytes[i % len(key_bytes)])
-        
-        # Convert back to string (as hex)
+
         output_hex = output_bytes.hex()
-        
+
         result['xor_result'] = output_hex
         result['success'] = True
     except Exception as e:
         result['success'] = False
         result['error'] = str(e)
-    
+
     return result
-"""
-    
-    def _template_caesar_tool(self, required_outputs=None) -> str:
+'''
+
+    def _template_caesar_tool(self, required_outputs: Optional[List[str]] = None) -> str:
         """Create a template for Caesar cipher."""
-        return """
+        return '''
 def caesar_cipher(text: str, shift: int = None) -> dict:
     """
     Apply or break Caesar cipher.
-    
+
     Args:
         text: The text to encrypt/decrypt
         shift: The shift amount (if None, try all shifts)
-        
+
     Returns:
         Dictionary with the results
     """
     import string
-    
+
     result = {}
-    
+
     try:
         if shift is not None:
-            # Encrypt/decrypt with the given shift
             alphabet = string.ascii_lowercase
             shifted_alphabet = alphabet[shift:] + alphabet[:shift]
             table = str.maketrans(alphabet, shifted_alphabet)
-            
+
             output = text.lower().translate(table)
             result['shifted_text'] = output
             result['shift'] = shift
             result['success'] = True
         else:
-            # Try all possible shifts
             alphabet = string.ascii_lowercase
             all_shifts = {}
-            
+
             for i in range(26):
                 shifted_alphabet = alphabet[i:] + alphabet[:i]
                 table = str.maketrans(alphabet, shifted_alphabet)
-                
                 all_shifts[i] = text.lower().translate(table)
-            
+
             result['all_shifts'] = all_shifts
             result['success'] = True
     except Exception as e:
         result['success'] = False
         result['error'] = str(e)
-    
+
     return result
-"""
-    
-    def _template_hash_tool(self, required_outputs=None) -> str:
+'''
+
+    def _template_hash_tool(self, required_outputs: Optional[List[str]] = None) -> str:
         """Create a template for hash functions."""
-        return """
+        return '''
 def hash_tool(data: str, algorithm: str = "sha256") -> dict:
     """
     Calculate hash of the data using the specified algorithm.
-    
+
     Args:
         data: The data to hash
         algorithm: Hash algorithm to use (md5, sha1, sha256, sha512)
-        
+
     Returns:
         Dictionary with the results
     """
     import hashlib
-    
+
     result = {}
-    
+
     try:
         data_bytes = data.encode('utf-8')
-        
+
         if algorithm == "md5":
             hash_obj = hashlib.md5(data_bytes)
         elif algorithm == "sha1":
@@ -734,50 +657,43 @@ def hash_tool(data: str, algorithm: str = "sha256") -> dict:
             hash_obj = hashlib.sha512(data_bytes)
         else:
             raise ValueError(f"Unsupported algorithm: {algorithm}")
-        
+
         result['hash'] = hash_obj.hexdigest()
         result['algorithm'] = algorithm
         result['success'] = True
     except Exception as e:
         result['success'] = False
         result['error'] = str(e)
-    
+
     return result
-"""
-    
-    def _template_frequency_analysis_tool(self, required_outputs=None) -> str:
+'''
+
+    def _template_frequency_analysis_tool(self, required_outputs: Optional[List[str]] = None) -> str:
         """Create a template for frequency analysis."""
-        return """
+        return '''
 def frequency_analysis(text: str) -> dict:
     """
     Perform frequency analysis on the text.
-    
+
     Args:
         text: The text to analyze
-        
+
     Returns:
         Dictionary with the results
     """
     import string
     from collections import Counter
-    
+
     result = {}
-    
+
     try:
-        # Clean the text (keep only letters)
         cleaned_text = ''.join(c.lower() for c in text if c.lower() in string.ascii_lowercase)
-        
-        # Count letter frequencies
         letter_counts = Counter(cleaned_text)
         total_letters = len(cleaned_text)
-        
-        # Calculate frequencies
+
         frequencies = {letter: count / total_letters for letter, count in letter_counts.items()}
-        
-        # Sort by frequency (descending)
         sorted_frequencies = dict(sorted(frequencies.items(), key=lambda x: x[1], reverse=True))
-        
-        # Common English letter frequencies (for comparison)
+
         english_frequencies = {
             'e': 0.1202, 't': 0.0910, 'a': 0.0812, 'o': 0.0768, 'i': 0.0731,
             'n': 0.0695, 's': 0.0628, 'r': 0.0602, 'h': 0.0592, 'd': 0.0432,
@@ -785,33 +701,32 @@ def frequency_analysis(text: str) -> dict:
             'y': 0.0211, 'w': 0.0209, 'g': 0.0203, 'p': 0.0182, 'b': 0.0149,
             'v': 0.0111, 'k': 0.0069, 'x': 0.0017, 'q': 0.0011, 'j': 0.0010, 'z': 0.0007
         }
-        
-        # Suggest potential mappings
+
         potential_mappings = {}
         for i, (text_letter, _) in enumerate(sorted_frequencies.items()):
             english_letter = list(english_frequencies.keys())[i if i < 26 else 25]
             potential_mappings[text_letter] = english_letter
-        
+
         result['frequencies'] = sorted_frequencies
         result['potential_mappings'] = potential_mappings
         result['success'] = True
     except Exception as e:
         result['success'] = False
         result['error'] = str(e)
-    
+
     return result
-"""
-    
-    def _template_generic_analysis_tool(self, required_outputs=None) -> str:
+'''
+
+    def _template_generic_analysis_tool(self, required_outputs: Optional[List[str]] = None) -> str:
         """Create a template for generic text analysis."""
-        return """
+        return '''
 def analyze_text(text: str) -> dict:
     """
     Perform general analysis on the text.
-    
+
     Args:
         text: The text to analyze
-        
+
     Returns:
         Dictionary with the results
     """
@@ -819,178 +734,137 @@ def analyze_text(text: str) -> dict:
     import string
     from collections import Counter
     import binascii
-    
+
     result = {}
-    
+
     try:
-        # Basic statistics
         result['length'] = len(text)
         result['lines'] = text.count('\\n') + 1
-        
-        # Character analysis
+
         char_count = Counter(text)
         result['unique_chars'] = len(char_count)
         result['most_common_chars'] = char_count.most_common(10)
-        
-        # Detect encodings
-        
-        # Check if it's hex
+
         hex_pattern = re.compile(r'^[0-9a-fA-F]+$')
         result['is_hex'] = bool(hex_pattern.match(text.strip()))
-        
+
         if result['is_hex']:
             try:
-                # Try to decode hex
                 decoded = binascii.unhexlify(text.strip())
                 result['hex_decoded'] = decoded.decode('utf-8', errors='replace')
-            except:
+            except Exception:
                 pass
-        
-        # Check if it's base64
+
         base64_pattern = re.compile(r'^[A-Za-z0-9+/]+={0,2}$')
         result['is_base64'] = bool(base64_pattern.match(text.strip()))
-        
+
         if result['is_base64']:
             import base64
             try:
-                # Try to decode base64
                 decoded = base64.b64decode(text.strip())
                 result['base64_decoded'] = decoded.decode('utf-8', errors='replace')
-            except:
+            except Exception:
                 pass
-        
-        # Check for binary
-        binary_pattern = re.compile(r'^[01\s]+$')
+
+        binary_pattern = re.compile(r'^[01\\s]+$')
         result['is_binary'] = bool(binary_pattern.match(text.strip()))
-        
+
         if result['is_binary']:
-            # Try to decode binary
             try:
                 binary_text = ''.join(text.strip().split())
                 bytes_list = [binary_text[i:i+8] for i in range(0, len(binary_text), 8)]
                 decoded = ''.join(chr(int(byte, 2)) for byte in bytes_list)
                 result['binary_decoded'] = decoded
-            except:
+            except Exception:
                 pass
-        
-        # Pattern analysis
+
         repeated_sequences = []
         for length in range(3, 10):
             sequences = {}
             for i in range(len(text) - length + 1):
-                seq = text[i:i+length]
-                if seq in sequences:
-                    sequences[seq] += 1
-                else:
-                    sequences[seq] = 1
-            
-            for seq, count in sequences.items():
-                if count > 1:
-                    repeated_sequences.append((seq, count))
-        
-        # Sort by count (descending)
+                seq = text[i : i + length]
+                sequences[seq] = sequences.get(seq, 0) + 1
+
+            repeated_sequences.extend([(seq, count) for seq, count in sequences.items() if count > 1])
+
         repeated_sequences.sort(key=lambda x: x[1], reverse=True)
         result['repeated_sequences'] = repeated_sequences[:10]
-        
+
         result['success'] = True
     except Exception as e:
         result['success'] = False
         result['error'] = str(e)
-    
+
     return result
-"""
-    
-    def execute_code(self, code: str, inputs: Dict[str, Any] = None) -> Dict[str, Any]:
+'''
+
+    def execute_code(self, code: str, inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute the generated code safely.
-        
+
         Args:
             code: Python code to execute
             inputs: Optional dictionary of input variables
-            
+
         Returns:
             Execution results
         """
         return self.execution_env.execute(code, inputs)
-    
-    def register_new_tool(self, task_description: str, state=None) -> Optional[str]:
+
+    def register_new_tool(self, task_description: str, state: Optional[Any] = None) -> Optional[str]:
         """
         Generate and register a new tool based on the task description.
-        
+
         Args:
             task_description: Description of the tool to create
             state: Current puzzle state (if available)
-            
+
         Returns:
             Tool ID if successful, None otherwise
         """
-        # Generate code for the tool
         code = self.generate_code(task_description, state)
-        
-        # Extract tool name from the first line of the function
         tool_name = None
-        function_match = re.search(r'def\s+(\w+)', code)
-        if function_match:
-            tool_name = function_match.group(1)
-        
-        # Register the tool
+        match = re.search(r"def\s+(\w+)", code)
+        if match:
+            tool_name = match.group(1)
         return self.tool_registry.register_tool(code, name=tool_name, description=task_description)
-    
-    def use_tool(self, tool_id: str, inputs: Dict[str, Any] = None) -> Dict[str, Any]:
+
+    def use_tool(self, tool_id: str, inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Use a registered tool.
-        
+
         Args:
             tool_id: ID of the tool to use
             inputs: Input parameters for the tool
-            
+
         Returns:
             Tool execution results
         """
         tool = self.tool_registry.get_tool(tool_id)
-        
         if not tool:
-            return {
-                'success': False,
-                'error': f"Tool not found: {tool_id}"
-            }
-        
+            return {"success": False, "error": f"Tool not found: {tool_id}"}
+
         try:
-            # Call the tool function with the inputs
-            if inputs:
-                result = tool(**inputs)
-            else:
-                result = tool()
-            
-            return {
-                'success': True,
-                'result': result
-            }
+            result = tool(**inputs) if inputs else tool()
+            return {"success": True, "result": result}
         except Exception as e:
-            return {
-                'success': False,
-                'error': str(e),
-                'traceback': traceback.format_exc()
-            }
-    
-    def analyze_and_create_tools(self, state) -> List[str]:
+            return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+    def analyze_and_create_tools(self, state: Any) -> List[str]:
         """
         Analyze the puzzle state and create appropriate tools.
-        
+
         Args:
             state: Current puzzle state
-            
+
         Returns:
             List of created tool IDs
         """
-        # Skip if no LLM is available
-        if not self.llm_agent or self.llm_agent.fallback_mode:
+        if not self.llm_agent or getattr(self.llm_agent, "fallback_mode", False):
             logger.info("No LLM available for tool creation, using defaults")
             return self._create_default_tools()
-        
+
         state_summary = state.get_summary()
-        
-        # Prompt for tool identification
         prompt = f"""
 Analyze this puzzle state and identify 3-5 specialized tools that would be helpful for solving it.
 For each tool, provide a short description of what it should do.
@@ -1008,133 +882,87 @@ FORMAT YOUR RESPONSE AS A JSON ARRAY OF OBJECTS:
 ]
 """
         try:
-            # Get tool suggestions from LLM
             result = self.llm_agent._send_to_llm(prompt)
-            
-            # Extract the JSON array from the response
-            json_match = re.search(r'\[\s*{.*}\s*\]', result, re.DOTALL)
-            
+            json_match = re.search(r"\[\s*{.*}\s*\]", result, re.DOTALL)
             if json_match:
-                tools_json = json_match.group(0)
-                suggested_tools = json.loads(tools_json)
+                suggested_tools = json.loads(json_match.group(0))
             else:
-                # Fallback to default tools
                 logger.warning("Failed to parse tool suggestions from LLM, using defaults")
                 return self._create_default_tools()
-            
-            # Create each suggested tool
+
             created_tool_ids = []
-            
             for tool_info in suggested_tools:
-                tool_name = tool_info.get('name', '')
-                tool_description = tool_info.get('description', '')
-                
-                # Generate and register the tool
+                tool_name = tool_info.get("name", "")
+                tool_description = tool_info.get("description", "")
                 tool_id = self.register_new_tool(
-                    f"Create a tool named '{tool_name}' that {tool_description}",
-                    state
+                    f"Create a tool named '{tool_name}' that {tool_description}", state
                 )
-                
                 if tool_id:
                     created_tool_ids.append(tool_id)
-            
+
             return created_tool_ids
-            
+
         except Exception as e:
             logger.error(f"Error analyzing and creating tools: {e}")
             return self._create_default_tools()
-    
+
     def _create_default_tools(self) -> List[str]:
         """Create a set of default tools for cryptographic puzzles."""
-        default_tool_descriptions = [
+        default_descriptions = [
             "Create a tool for analyzing text frequency patterns",
             "Create a tool for brute-forcing Caesar ciphers",
             "Create a tool for detecting and decoding common encodings",
             "Create a tool for XOR cipher operations",
-            "Create a tool for extracting hidden data from text"
+            "Create a tool for extracting hidden data from text",
         ]
-        
+
         created_tool_ids = []
-        
-        for description in default_tool_descriptions:
-            tool_id = self.register_new_tool(description)
+        for desc in default_descriptions:
+            tool_id = self.register_new_tool(desc)
             if tool_id:
                 created_tool_ids.append(tool_id)
-        
         return created_tool_ids
-    
-    def integrate_with_state(self, state, analyze_puzzle=True) -> Any:
+
+    def integrate_with_state(self, state: Any, analyze_puzzle: bool = True) -> Any:
         """
         Integrate code analysis with the puzzle state.
-        
+
         Args:
             state: Current puzzle state
             analyze_puzzle: Whether to analyze the puzzle and create tools
-            
+
         Returns:
             Updated state
         """
-        state.add_insight(
-            "CodeAgent initialized for dynamic code analysis", 
-            analyzer="code_agent"
-        )
-        
-        # Create tools based on puzzle analysis
+        state.add_insight("CodeAgent initialized for dynamic code analysis", analyzer="code_agent")
+
         if analyze_puzzle:
             tool_ids = self.analyze_and_create_tools(state)
-            
             if tool_ids:
-                state.add_insight(
-                    f"Created {len(tool_ids)} custom analysis tools",
-                    analyzer="code_agent"
-                )
-                
-                # List the created tools
+                state.add_insight(f"Created {len(tool_ids)} custom analysis tools", analyzer="code_agent")
+
                 tools = []
                 for tool_id in tool_ids:
-                    tool_info = next((info for info in self.tool_registry.list_tools() 
-                                    if info['id'] == tool_id), None)
+                    tool_info = next(
+                        (info for info in self.tool_registry.list_tools() if info["id"] == tool_id), None
+                    )
                     if tool_info:
                         tools.append(f"{tool_info['name']}: {tool_info['description']}")
-                
-                state.add_insight(
-                    f"Available tools: {', '.join(tools)}",
-                    analyzer="code_agent"
-                )
-        
-        # For text puzzles, perform general analysis
-        if state.puzzle_text:
-            state.add_insight(
-                "Performing general text analysis",
-                analyzer="code_agent"
-            )
-            
-            # Generate analysis code
-            analysis_code = self.generate_code(
-                "Create a function to perform general analysis on the puzzle text",
-                state
-            )
-            
-            # Execute the analysis
-            result = self.execute_code(
-                analysis_code,
-                {"text": state.puzzle_text}
-            )
-            
-            if result.get('success'):
-                # Extract analysis insights
-                analysis_result = result.get('result', {})
-                
+
+                state.add_insight(f"Available tools: {', '.join(tools)}", analyzer="code_agent")
+
+        if getattr(state, "puzzle_text", None):
+            state.add_insight("Performing general text analysis", analyzer="code_agent")
+
+            analysis_code = self.generate_code("Create a function to perform general analysis on the puzzle text", state)
+            result = self.execute_code(analysis_code, {"text": state.puzzle_text})
+
+            if result.get("success"):
+                analysis_result = result.get("result", {})
                 for key, value in analysis_result.items():
-                    if key != 'success' and not key.startswith('_'):
-                        state.add_insight(
-                            f"Analysis - {key}: {value}",
-                            analyzer="code_agent"
-                        )
+                    if key != "success" and not key.startswith("_"):
+                        state.add_insight(f"Analysis - {key}: {value}", analyzer="code_agent")
             else:
-                state.add_insight(
-                    f"Code analysis failed: {result.get('error', 'Unknown error')}",
-                    analyzer="code_agent"
-                )
-        
+                state.add_insight(f"Code analysis failed: {result.get('error', 'Unknown error')}", analyzer="code_agent")
+
         return state

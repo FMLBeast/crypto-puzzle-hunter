@@ -1,1314 +1,1426 @@
 """
-Image analyzer module for Crypto Hunter
-
-This module provides functions for analyzing images and detecting
-steganography or hidden data within them.
+Image analyzer for Crypto Hunter.
+Analyzes images for steganography, metadata, and hidden information.
 """
-import logging
-import io
-import re
-import math
-import binascii
-from typing import Dict, List, Any, Optional, Tuple, Union
-from pathlib import Path
 
+import io
+import string
+import re
+import struct
+import math
+import os
+from collections import Counter
+from pathlib import Path
 from core.state import State
 from analyzers.base import register_analyzer, analyzer_compatibility
 
-logger = logging.getLogger(__name__)
-
-# Try to import PIL for image processing
+# Import optional dependencies
 try:
-    from PIL import Image, ExifTags, ImageChops, ImageStat
-    PIL_AVAILABLE = True
+    from PIL import Image, ExifTags
+    HAS_PIL = True
 except ImportError:
-    logger.warning("PIL not available, image analysis will be limited")
-    PIL_AVAILABLE = False
+    HAS_PIL = False
 
-# Try to import numpy for advanced image analysis
-try:
-    import numpy as np
-    NUMPY_AVAILABLE = True
-except ImportError:
-    logger.warning("NumPy not available, advanced image analysis will be limited")
-    NUMPY_AVAILABLE = False
-
-
-@register_analyzer("image_analyze")
-@analyzer_compatibility(file_types=["png", "jpg", "jpeg", "gif", "bmp", "tiff"], requires_binary=True)
-def analyze_image(state: State) -> State:
+@register_analyzer("image_analyzer")
+@analyzer_compatibility(requires_binary=True)
+def analyze_image(state: State) -> None:
     """
-    Main image analyzer function that orchestrates image analysis.
-
+    Analyze image for steganography, metadata, and hidden information.
+    
     Args:
         state: Current puzzle state
-
+        
     Returns:
-        Updated state after analysis
+        Updated state
     """
-    if not state.puzzle_data:
-        state.add_insight("No image data available for analysis", analyzer="image_analyzer")
+    if not state.binary_data:
         return state
     
-    # Check if PIL is available
-    if not PIL_AVAILABLE:
-        state.add_insight("PIL not available, image analysis will be limited", analyzer="image_analyzer")
+    # Check if the file is an image
+    is_image = state.file_type in ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "webp"]
+    
+    if not is_image:
+        # Try to detect image from magic bytes
+        magic_bytes = state.binary_data[:8]
+        if magic_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            is_image = True
+            state.file_type = "png"
+        elif magic_bytes.startswith(b"\xff\xd8"):
+            is_image = True
+            state.file_type = "jpeg"
+        elif magic_bytes.startswith(b"GIF87a") or magic_bytes.startswith(b"GIF89a"):
+            is_image = True
+            state.file_type = "gif"
+        elif magic_bytes.startswith(b"BM"):
+            is_image = True
+            state.file_type = "bmp"
+    
+    if not is_image:
+        state.add_insight(
+            "File does not appear to be an image, skipping image analysis",
+            analyzer="image_analyzer"
+        )
         return state
     
-    # Run various image analysis functions
-    state = extract_metadata(state)
-    state = analyze_image_properties(state)
-    state = detect_steganography(state)
-    state = analyze_color_channels(state)
-    state = check_pixel_patterns(state)
+    state.add_insight(
+        f"Analyzing {state.file_type} image ({state.file_size} bytes)",
+        analyzer="image_analyzer"
+    )
+    
+    # Analyze image if PIL is available
+    if HAS_PIL:
+        analyze_with_pil(state)
+    else:
+        state.add_insight(
+            "PIL library not available, image analysis limited",
+            analyzer="image_analyzer"
+        )
+        analyze_without_pil(state)
+    
+    # Look for hidden text in the image
+    extract_text_from_image(state)
+    
+    # Check for steganography
+    check_lsb_steganography(state)
+    
+    # Check for hidden files in the image
+    check_embedded_files(state)
     
     return state
 
-
-@register_analyzer("extract_metadata")
-@analyzer_compatibility(file_types=["png", "jpg", "jpeg", "gif", "bmp", "tiff"], requires_binary=True)
-def extract_metadata(state: State) -> State:
+def analyze_with_pil(state: State) -> None:
     """
-    Extract metadata from image files.
-
+    Analyze image using the PIL library.
+    
     Args:
         state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
     """
-    if not state.puzzle_data or not PIL_AVAILABLE:
-        return state
-    
     try:
-        # Load image from binary data
-        img_data = io.BytesIO(state.puzzle_data)
-        img = Image.open(img_data)
+        # Open the image
+        image_data = io.BytesIO(state.binary_data)
+        image = Image.open(image_data)
         
-        # Extract basic properties
-        properties = {
-            "format": img.format,
-            "size": img.size,
-            "mode": img.mode,
-            "info": img.info
-        }
+        # Get basic image information
+        width, height = image.size
+        mode = image.mode
+        format = image.format
         
         state.add_insight(
-            f"Image properties: {img.format}, {img.size[0]}x{img.size[1]}px, mode={img.mode}",
-            analyzer="image_analyzer",
-            data=properties
+            f"Image dimensions: {width}x{height}, Mode: {mode}, Format: {format}",
+            analyzer="image_analyzer"
         )
         
-        # Extract EXIF data if present
-        if hasattr(img, '_getexif') and img._getexif():
-            exif = {
-                ExifTags.TAGS.get(tag, tag): value
-                for tag, value in img._getexif().items()
-                if tag in ExifTags.TAGS
+        # Analyze color information
+        if mode == "RGB" or mode == "RGBA":
+            analyze_rgb_image(state, image)
+        elif mode == "L":
+            analyze_grayscale_image(state, image)
+        elif mode == "P":
+            analyze_palette_image(state, image)
+        
+        # Analyze image metadata
+        analyze_image_metadata(state, image)
+        
+    except Exception as e:
+        state.add_insight(
+            f"Error analyzing image with PIL: {e}",
+            analyzer="image_analyzer"
+        )
+
+def analyze_without_pil(state: State) -> None:
+    """
+    Analyze image without using the PIL library.
+    
+    Args:
+        state: Current puzzle state
+    """
+    # Basic analysis of image headers
+    if state.file_type == "png":
+        analyze_png_header(state)
+    elif state.file_type in ["jpg", "jpeg"]:
+        analyze_jpeg_header(state)
+    elif state.file_type == "gif":
+        analyze_gif_header(state)
+    elif state.file_type == "bmp":
+        analyze_bmp_header(state)
+
+def analyze_rgb_image(state: State, image) -> None:
+    """
+    Analyze an RGB image.
+    
+    Args:
+        state: Current puzzle state
+        image: PIL Image object
+    """
+    try:
+        # Get color statistics
+        pixels = list(image.getdata())
+        total_pixels = len(pixels)
+        
+        if total_pixels == 0:
+            return
+        
+        # Count unique colors
+        unique_colors = len(set(pixels))
+        
+        state.add_insight(
+            f"Image has {unique_colors} unique colors out of {total_pixels} total pixels",
+            analyzer="image_analyzer"
+        )
+        
+        # Check for unusual color patterns
+        if unique_colors < 10 and total_pixels > 1000:
+            state.add_insight(
+                "Image has unusually few unique colors, may contain hidden information",
+                analyzer="image_analyzer"
+            )
+        
+        # Check for patterns in least significant bits
+        has_lsb_pattern = check_lsb_pattern(pixels)
+        if has_lsb_pattern:
+            state.add_insight(
+                "Detected potential pattern in least significant bits, may contain steganography",
+                analyzer="image_analyzer"
+            )
+        
+        # Analyze color distribution
+        red = [pixel[0] for pixel in pixels if len(pixel) >= 1]
+        green = [pixel[1] for pixel in pixels if len(pixel) >= 2]
+        blue = [pixel[2] for pixel in pixels if len(pixel) >= 3]
+        
+        # Check for uneven color distribution
+        r_std_dev = calculate_std_dev(red)
+        g_std_dev = calculate_std_dev(green)
+        b_std_dev = calculate_std_dev(blue)
+        
+        if max(r_std_dev, g_std_dev, b_std_dev) / min(r_std_dev, g_std_dev, b_std_dev) > 2:
+            state.add_insight(
+                "Uneven color channel distribution detected, may indicate hidden data",
+                analyzer="image_analyzer"
+            )
+        
+    except Exception as e:
+        state.add_insight(
+            f"Error analyzing RGB image: {e}",
+            analyzer="image_analyzer"
+        )
+
+def analyze_grayscale_image(state: State, image) -> None:
+    """
+    Analyze a grayscale image.
+    
+    Args:
+        state: Current puzzle state
+        image: PIL Image object
+    """
+    try:
+        # Get grayscale statistics
+        pixels = list(image.getdata())
+        total_pixels = len(pixels)
+        
+        if total_pixels == 0:
+            return
+        
+        # Count unique gray values
+        unique_values = len(set(pixels))
+        
+        state.add_insight(
+            f"Grayscale image has {unique_values} unique values out of {total_pixels} total pixels",
+            analyzer="image_analyzer"
+        )
+        
+        # Check for unusual patterns
+        if unique_values < 5 and total_pixels > 1000:
+            state.add_insight(
+                "Grayscale image has unusually few unique values, may contain hidden information",
+                analyzer="image_analyzer"
+            )
+        
+        # Check for patterns in least significant bits
+        has_lsb_pattern = check_lsb_pattern(pixels)
+        if has_lsb_pattern:
+            state.add_insight(
+                "Detected potential pattern in least significant bits, may contain steganography",
+                analyzer="image_analyzer"
+            )
+        
+    except Exception as e:
+        state.add_insight(
+            f"Error analyzing grayscale image: {e}",
+            analyzer="image_analyzer"
+        )
+
+def analyze_palette_image(state: State, image) -> None:
+    """
+    Analyze a palettized image.
+    
+    Args:
+        state: Current puzzle state
+        image: PIL Image object
+    """
+    try:
+        # Get palette information
+        if not hasattr(image, "palette"):
+            return
+        
+        palette_data = image.palette.palette
+        
+        if not palette_data:
+            return
+        
+        # Count colors in the palette
+        palette_size = len(palette_data) // 3
+        
+        state.add_insight(
+            f"Image uses a color palette with {palette_size} colors",
+            analyzer="image_analyzer"
+        )
+        
+        # Check for hidden data in unused palette entries
+        pixels = list(image.getdata())
+        used_indices = set(pixels)
+        
+        if len(used_indices) < palette_size:
+            state.add_insight(
+                f"Image uses {len(used_indices)} colors out of {palette_size} in the palette, unused entries may contain hidden data",
+                analyzer="image_analyzer"
+            )
+        
+    except Exception as e:
+        state.add_insight(
+            f"Error analyzing palette image: {e}",
+            analyzer="image_analyzer"
+        )
+
+def analyze_image_metadata(state: State, image) -> None:
+    """
+    Analyze image metadata.
+    
+    Args:
+        state: Current puzzle state
+        image: PIL Image object
+    """
+    try:
+        # Check for EXIF data
+        if hasattr(image, "_getexif") and image._getexif():
+            exif_data = image._getexif()
+            
+            # List of interesting EXIF tags
+            interesting_tags = {
+                'Artist', 'Copyright', 'ImageDescription', 'Make', 'Model',
+                'Software', 'DateTime', 'DateTimeOriginal', 'GPSInfo',
+                'UserComment'
             }
             
-            # Clean up binary data in EXIF
-            clean_exif = {}
-            for key, value in exif.items():
-                if isinstance(value, bytes):
-                    # Check if it might contain text
-                    try:
-                        text_value = value.decode('utf-8', errors='replace')
-                        if any(c.isalnum() for c in text_value):
-                            clean_exif[key] = text_value
-                        else:
-                            clean_exif[key] = f"Binary data ({len(value)} bytes)"
-                    except:
-                        clean_exif[key] = f"Binary data ({len(value)} bytes)"
-                else:
-                    clean_exif[key] = value
+            # Convert tag IDs to names
+            exif_info = {}
+            for tag_id, value in exif_data.items():
+                tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
+                exif_info[tag_name] = value
             
-            # Add insight with EXIF data
-            state.add_insight(
-                f"EXIF data found with {len(clean_exif)} entries",
-                analyzer="image_analyzer",
-                data={"exif": clean_exif}
-            )
+            # Look for interesting tags
+            found_tags = []
+            for tag in interesting_tags:
+                if tag in exif_info:
+                    found_tags.append(f"{tag}: {exif_info[tag]}")
             
-            # Look for interesting EXIF data
-            interesting_keys = [
-                "Artist", "Copyright", "ImageDescription", "UserComment",
-                "Software", "Author", "Comment", "Title", "Subject"
-            ]
-            
-            for key in interesting_keys:
-                if key in clean_exif:
-                    state.add_insight(
-                        f"Interesting EXIF data found: {key} = {clean_exif[key]}",
-                        analyzer="image_analyzer"
-                    )
+            if found_tags:
+                state.add_insight(
+                    f"Found {len(found_tags)} interesting EXIF tags",
+                    analyzer="image_analyzer"
+                )
+                
+                # Add transformation with EXIF data
+                state.add_transformation(
+                    name="EXIF Metadata",
+                    description="EXIF metadata extracted from the image",
+                    input_data=f"Image file ({state.file_size} bytes)",
+                    output_data="\n".join(found_tags),
+                    analyzer="image_analyzer"
+                )
         
         # Check for PNG text chunks
-        if img.format == 'PNG' and img.info:
-            text_chunks = {k: v for k, v in img.info.items() if isinstance(k, str) and isinstance(v, str)}
+        if image.format == "PNG" and hasattr(image, "text") and image.text:
+            text_chunks = []
+            for key, value in image.text.items():
+                text_chunks.append(f"{key}: {value}")
+            
             if text_chunks:
                 state.add_insight(
-                    f"PNG text chunks found: {text_chunks}",
-                    analyzer="image_analyzer",
-                    data={"text_chunks": text_chunks}
+                    f"Found {len(text_chunks)} PNG text chunks",
+                    analyzer="image_analyzer"
                 )
-        
-        # Check for comments in image
-        if img.format == 'JPEG' and 'comment' in img.info:
-            comment = img.info['comment']
-            if isinstance(comment, bytes):
-                comment = comment.decode('utf-8', errors='replace')
-            
-            state.add_insight(
-                f"JPEG comment found: {comment}",
-                analyzer="image_analyzer",
-                data={"comment": comment}
-            )
-    
-    except Exception as e:
-        state.add_insight(f"Error extracting image metadata: {e}", analyzer="image_analyzer")
-    
-    return state
-
-
-@register_analyzer("analyze_image_properties")
-@analyzer_compatibility(file_types=["png", "jpg", "jpeg", "gif", "bmp", "tiff"], requires_binary=True)
-def analyze_image_properties(state: State) -> State:
-    """
-    Analyze basic image properties for anomalies.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_data or not PIL_AVAILABLE:
-        return state
-    
-    try:
-        # Load image
-        img_data = io.BytesIO(state.puzzle_data)
-        img = Image.open(img_data)
-        
-        # Check for unusual image dimensions
-        width, height = img.size
-        
-        if width % 8 == 0 and height % 8 == 0:
-            state.add_insight(
-                f"Image dimensions ({width}x{height}) are multiples of 8, common for steganography",
-                analyzer="image_analyzer"
-            )
-        
-        if width == height:
-            state.add_insight(
-                f"Image is a perfect square ({width}x{height})",
-                analyzer="image_analyzer"
-            )
-        
-        # Check for unusual bit depth
-        bit_depth = None
-        if img.mode == '1':
-            bit_depth = 1
-        elif img.mode == 'L':
-            bit_depth = 8
-        elif img.mode == 'RGB':
-            bit_depth = 24
-        elif img.mode == 'RGBA':
-            bit_depth = 32
-        
-        if bit_depth:
-            state.add_insight(
-                f"Image bit depth: {bit_depth}",
-                analyzer="image_analyzer",
-                data={"bit_depth": bit_depth}
-            )
-            
-            if bit_depth == 1:
-                state.add_insight(
-                    "1-bit image detected - common for QR codes or binary puzzles",
+                
+                # Add transformation with text chunks
+                state.add_transformation(
+                    name="PNG Text Chunks",
+                    description="Text chunks extracted from the PNG image",
+                    input_data=f"PNG image ({state.file_size} bytes)",
+                    output_data="\n".join(text_chunks),
                     analyzer="image_analyzer"
                 )
         
-        # Check for palette
-        if img.mode == 'P':
+    except Exception as e:
+        state.add_insight(
+            f"Error analyzing image metadata: {e}",
+            analyzer="image_analyzer"
+        )
+
+def analyze_png_header(state: State) -> None:
+    """
+    Analyze PNG header without using PIL.
+    
+    Args:
+        state: Current puzzle state
+    """
+    try:
+        # Check for PNG signature
+        if not state.binary_data.startswith(b"\x89PNG\r\n\x1a\n"):
             state.add_insight(
-                "Image uses palette mode, could contain hidden data in palette",
+                "File does not start with a valid PNG signature",
                 analyzer="image_analyzer"
             )
-            
-            # Extract palette
-            if hasattr(img, 'palette') and img.palette:
-                palette_data = img.getpalette()
-                palette_size = len(palette_data) // 3
-                state.add_insight(
-                    f"Image has a palette with {palette_size} colors",
-                    analyzer="image_analyzer",
-                    data={"palette_size": palette_size}
-                )
-                
-                # Check for unusual palette usage
-                if palette_size > 100:  # Typically, palettes are 256 colors or fewer
-                    state.add_insight(
-                        f"Large palette detected ({palette_size} colors), might contain hidden data",
-                        analyzer="image_analyzer"
-                    )
+            return
         
-        # Check for alpha channel
-        if 'A' in img.mode:
+        # Parse PNG chunks
+        chunk_data = parse_png_chunks(state.binary_data)
+        
+        if not chunk_data:
+            return
+        
+        # Get image dimensions from IHDR chunk
+        ihdr_chunk = next((chunk for chunk in chunk_data if chunk["type"] == "IHDR"), None)
+        
+        if ihdr_chunk and len(ihdr_chunk["data"]) >= 8:
+            width = int.from_bytes(ihdr_chunk["data"][0:4], byteorder="big")
+            height = int.from_bytes(ihdr_chunk["data"][4:8], byteorder="big")
+            bit_depth = ihdr_chunk["data"][8] if len(ihdr_chunk["data"]) > 8 else None
+            color_type = ihdr_chunk["data"][9] if len(ihdr_chunk["data"]) > 9 else None
+            
+            dimensions_info = f"Image dimensions: {width}x{height}"
+            if bit_depth is not None:
+                dimensions_info += f", Bit depth: {bit_depth}"
+            if color_type is not None:
+                color_type_name = {
+                    0: "Grayscale",
+                    2: "RGB",
+                    3: "Palette",
+                    4: "Grayscale with alpha",
+                    6: "RGBA"
+                }.get(color_type, f"Unknown ({color_type})")
+                dimensions_info += f", Color type: {color_type_name}"
+            
+            state.add_insight(dimensions_info, analyzer="image_analyzer")
+        
+        # Look for text chunks
+        text_chunks = [chunk for chunk in chunk_data if chunk["type"] in ["tEXt", "iTXt", "zTXt"]]
+        
+        if text_chunks:
             state.add_insight(
-                "Image has alpha channel, might contain hidden data",
+                f"Found {len(text_chunks)} text chunks in PNG file",
                 analyzer="image_analyzer"
             )
             
-            # Extract alpha channel
-            if NUMPY_AVAILABLE:
+            # Try to extract text
+            for chunk in text_chunks:
+                if chunk["type"] == "tEXt" and len(chunk["data"]) > 1:
+                    # tEXt chunks: keyword\0text
+                    null_pos = chunk["data"].find(b"\0")
+                    if null_pos != -1:
+                        keyword = chunk["data"][:null_pos].decode("latin1", errors="replace")
+                        text = chunk["data"][null_pos+1:].decode("latin1", errors="replace")
+                        
+                        state.add_transformation(
+                            name=f"PNG Text Chunk: {keyword}",
+                            description=f"Text from PNG tEXt chunk with keyword '{keyword}'",
+                            input_data=f"PNG image ({state.file_size} bytes)",
+                            output_data=text,
+                            analyzer="image_analyzer"
+                        )
+        
+        # Look for unusual chunks
+        standard_chunks = {"IHDR", "PLTE", "IDAT", "IEND", "tRNS", "cHRM", "gAMA", "iCCP", "sBIT", "sRGB", "tEXt", "iTXt", "zTXt", "bKGD", "hIST", "pHYs", "sPLT", "tIME"}
+        unusual_chunks = [chunk for chunk in chunk_data if chunk["type"] not in standard_chunks]
+        
+        if unusual_chunks:
+            state.add_insight(
+                f"Found {len(unusual_chunks)} non-standard chunks in PNG file: {', '.join(chunk['type'] for chunk in unusual_chunks)}",
+                analyzer="image_analyzer"
+            )
+            
+            # Add transformation with unusual chunks
+            unusual_chunk_info = "\n".join([
+                f"Chunk: {chunk['type']}, Length: {len(chunk['data'])} bytes"
+                for chunk in unusual_chunks
+            ])
+            
+            state.add_transformation(
+                name="Unusual PNG Chunks",
+                description="Non-standard chunks found in the PNG file",
+                input_data=f"PNG image ({state.file_size} bytes)",
+                output_data=unusual_chunk_info,
+                analyzer="image_analyzer"
+            )
+        
+    except Exception as e:
+        state.add_insight(
+            f"Error analyzing PNG header: {e}",
+            analyzer="image_analyzer"
+        )
+
+def analyze_jpeg_header(state: State) -> None:
+    """
+    Analyze JPEG header without using PIL.
+    
+    Args:
+        state: Current puzzle state
+    """
+    try:
+        # Check for JPEG signature
+        if not state.binary_data.startswith(b"\xff\xd8"):
+            state.add_insight(
+                "File does not start with a valid JPEG signature",
+                analyzer="image_analyzer"
+            )
+            return
+        
+        # Parse JPEG segments
+        segments = parse_jpeg_segments(state.binary_data)
+        
+        if not segments:
+            return
+        
+        # Look for dimensions in SOF segments
+        sof_segments = [seg for seg in segments if seg["marker"] in range(0xC0, 0xC4)]
+        
+        if sof_segments and len(sof_segments[0]["data"]) >= 5:
+            segment = sof_segments[0]
+            precision = segment["data"][0]
+            height = int.from_bytes(segment["data"][1:3], byteorder="big")
+            width = int.from_bytes(segment["data"][3:5], byteorder="big")
+            
+            state.add_insight(
+                f"Image dimensions: {width}x{height}, Precision: {precision} bits",
+                analyzer="image_analyzer"
+            )
+        
+        # Look for EXIF data
+        app1_segments = [seg for seg in segments if seg["marker"] == 0xE1]
+        
+        for segment in app1_segments:
+            if segment["data"].startswith(b"Exif\0\0"):
+                state.add_insight(
+                    "Found EXIF data in JPEG file",
+                    analyzer="image_analyzer"
+                )
+                break
+        
+        # Look for comment segments
+        comment_segments = [seg for seg in segments if seg["marker"] == 0xFE]
+        
+        if comment_segments:
+            state.add_insight(
+                f"Found {len(comment_segments)} comment segments in JPEG file",
+                analyzer="image_analyzer"
+            )
+            
+            # Try to extract comments
+            for i, segment in enumerate(comment_segments):
                 try:
-                    img_array = np.array(img)
-                    alpha_channel = img_array[:, :, 3] if img_array.ndim == 3 and img_array.shape[2] >= 4 else None
+                    comment = segment["data"].decode("utf-8", errors="replace")
                     
-                    if alpha_channel is not None:
-                        # Check for unusual patterns in alpha
-                        unique_alpha = np.unique(alpha_channel)
-                        if len(unique_alpha) > 1 and len(unique_alpha) < 10:
-                            state.add_insight(
-                                f"Alpha channel has unusual pattern with {len(unique_alpha)} unique values",
-                                analyzer="image_analyzer",
-                                data={"unique_alpha_values": unique_alpha.tolist()}
-                            )
-                            
-                            # Extract alpha as separate image
-                            alpha_img = Image.fromarray(alpha_channel)
-                            alpha_buffer = io.BytesIO()
-                            alpha_img.save(alpha_buffer, format="PNG")
-                            
-                            state.add_transformation(
-                                name="extract_alpha_channel",
-                                description="Extracted alpha channel as separate image",
-                                input_data=state.puzzle_data,
-                                output_data=alpha_buffer.getvalue(),
-                                analyzer="image_analyzer"
-                            )
-                except Exception as e:
-                    logger.debug(f"Error analyzing alpha channel: {e}")
-    
-    except Exception as e:
-        state.add_insight(f"Error analyzing image properties: {e}", analyzer="image_analyzer")
-    
-    return state
-
-
-@register_analyzer("detect_steganography")
-@analyzer_compatibility(file_types=["png", "jpg", "jpeg", "gif", "bmp", "tiff"], requires_binary=True)
-def detect_steganography(state: State) -> State:
-    """
-    Detect potential steganography in images.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_data or not PIL_AVAILABLE:
-        return state
-    
-    try:
-        # Load image
-        img_data = io.BytesIO(state.puzzle_data)
-        img = Image.open(img_data)
-        
-        # Check for LSB steganography
-        if img.mode in ('RGB', 'RGBA', 'L'):
-            lsb_result = check_lsb_steganography(img)
-            
-            if lsb_result['potential_steganography']:
-                state.add_insight(
-                    f"Potential LSB steganography detected ({lsb_result['score']:.2f}/10)",
-                    analyzer="image_analyzer",
-                    data=lsb_result
-                )
-                
-                if lsb_result['score'] > 7:
-                    # Try to extract LSB data
-                    try:
-                        extracted_data = extract_lsb_data(img)
-                        
-                        # Check if extracted data might be text
-                        potential_text = is_potential_text(extracted_data)
-                        
-                        if potential_text:
-                            state.add_transformation(
-                                name="extract_lsb_text",
-                                description="Extracted potential text from LSB",
-                                input_data=state.puzzle_data,
-                                output_data=extracted_data.decode('utf-8', errors='replace'),
-                                analyzer="image_analyzer"
-                            )
-                        else:
-                            state.add_transformation(
-                                name="extract_lsb_binary",
-                                description="Extracted binary data from LSB",
-                                input_data=state.puzzle_data,
-                                output_data=extracted_data,
-                                analyzer="image_analyzer"
-                            )
-                    except Exception as e:
-                        logger.debug(f"Error extracting LSB data: {e}")
-        
-        # Check for visible watermarks or patterns
-        watermark_result = check_for_watermark(img)
-        if watermark_result['potential_watermark']:
-            state.add_insight(
-                "Potential visible watermark or pattern detected",
-                analyzer="image_analyzer",
-                data=watermark_result
-            )
-            
-            # Extract enhanced watermark if found
-            if 'enhanced_watermark' in watermark_result:
-                enhanced_img = watermark_result['enhanced_watermark']
-                enhanced_buffer = io.BytesIO()
-                enhanced_img.save(enhanced_buffer, format="PNG")
-                
-                state.add_transformation(
-                    name="enhance_watermark",
-                    description="Enhanced potential watermark",
-                    input_data=state.puzzle_data,
-                    output_data=enhanced_buffer.getvalue(),
-                    analyzer="image_analyzer"
-                )
-        
-        # Check for data in image file after image data
-        if state.puzzle_data:
-            try:
-                # Get the actual image data size
-                img_data = io.BytesIO(state.puzzle_data)
-                img = Image.open(img_data)
-                
-                # Save the image to a new buffer to compare sizes
-                clean_buffer = io.BytesIO()
-                img.save(clean_buffer, format=img.format)
-                
-                clean_size = clean_buffer.tell()
-                original_size = len(state.puzzle_data)
-                
-                if original_size > clean_size + 16:  # Allow for small differences
-                    excess_data = state.puzzle_data[clean_size:]
-                    
-                    state.add_insight(
-                        f"Found {len(excess_data)} bytes of extra data after image content",
-                        analyzer="image_analyzer",
-                        data={"excess_size": len(excess_data)}
+                    state.add_transformation(
+                        name=f"JPEG Comment {i+1}",
+                        description=f"Comment from JPEG file",
+                        input_data=f"JPEG image ({state.file_size} bytes)",
+                        output_data=comment,
+                        analyzer="image_analyzer"
                     )
-                    
-                    # Check if the excess data might be a message
-                    if is_potential_text(excess_data):
-                        state.add_transformation(
-                            name="extract_excess_text",
-                            description="Extracted text from data after image",
-                            input_data=state.puzzle_data,
-                            output_data=excess_data.decode('utf-8', errors='replace'),
-                            analyzer="image_analyzer"
-                        )
-                    else:
-                        state.add_transformation(
-                            name="extract_excess_binary",
-                            description="Extracted binary data from after image",
-                            input_data=state.puzzle_data,
-                            output_data=excess_data,
-                            analyzer="image_analyzer"
-                        )
-            except Exception as e:
-                logger.debug(f"Error checking for data after image: {e}")
-    
-    except Exception as e:
-        state.add_insight(f"Error detecting steganography: {e}", analyzer="image_analyzer")
-    
-    return state
-
-
-@register_analyzer("analyze_color_channels")
-@analyzer_compatibility(file_types=["png", "jpg", "jpeg", "gif", "bmp", "tiff"], requires_binary=True)
-def analyze_color_channels(state: State) -> State:
-    """
-    Analyze individual color channels for hidden data.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_data or not PIL_AVAILABLE or not NUMPY_AVAILABLE:
-        return state
-    
-    try:
-        # Load image
-        img_data = io.BytesIO(state.puzzle_data)
-        img = Image.open(img_data)
+                except:
+                    pass
         
-        # Only analyze RGB/RGBA images
-        if img.mode not in ('RGB', 'RGBA'):
-            return state
+        # Look for unusual segments
+        standard_markers = {0xD8, 0xE0, 0xE1, 0xDB, 0xC0, 0xC2, 0xC4, 0xDA, 0xD9, 0xFE}
+        unusual_segments = [seg for seg in segments if seg["marker"] not in standard_markers]
         
-        # Convert to numpy array
-        img_array = np.array(img)
-        
-        # Analyze each color channel
-        channel_names = ['Red', 'Green', 'Blue']
-        for i, channel_name in enumerate(channel_names):
-            if img_array.ndim != 3 or img_array.shape[2] <= i:
-                continue
-                
-            channel = img_array[:, :, i]
-            
-            # Check for unusual patterns in this channel
-            unique_values = np.unique(channel)
-            hist, _ = np.histogram(channel, bins=256, range=(0, 256))
-            
-            # Get top histogram values
-            top_indices = np.argsort(hist)[-5:]  # Top 5 most common values
-            top_values = [(int(idx), int(hist[idx])) for idx in top_indices]
-            
-            # Check for unusual value distributions
-            if len(unique_values) < 30:  # Unusually few unique values
-                state.add_insight(
-                    f"Unusual {channel_name} channel with only {len(unique_values)} unique values",
-                    analyzer="image_analyzer",
-                    data={"channel": channel_name, "unique_values": len(unique_values)}
-                )
-                
-                # Extract this channel
-                channel_img = Image.fromarray(channel)
-                channel_buffer = io.BytesIO()
-                channel_img.save(channel_buffer, format="PNG")
-                
-                state.add_transformation(
-                    name=f"extract_{channel_name.lower()}_channel",
-                    description=f"Extracted {channel_name} channel as separate image",
-                    input_data=state.puzzle_data,
-                    output_data=channel_buffer.getvalue(),
-                    analyzer="image_analyzer"
-                )
-            
-            # Check for binary-like data (only 2 values)
-            if len(unique_values) == 2:
-                state.add_insight(
-                    f"{channel_name} channel contains binary-like data with values {unique_values[0]} and {unique_values[1]}",
-                    analyzer="image_analyzer"
-                )
-                
-                # Extract binary data from this channel
-                binary_data = extract_binary_channel(channel, unique_values)
-                
-                state.add_transformation(
-                    name=f"extract_binary_{channel_name.lower()}",
-                    description=f"Extracted binary data from {channel_name} channel",
-                    input_data=state.puzzle_data,
-                    output_data=binary_data,
-                    analyzer="image_analyzer"
-                )
-        
-        # Check for unusual relationships between channels
-        if img_array.ndim == 3 and img_array.shape[2] >= 3:
-            r, g, b = img_array[:, :, 0], img_array[:, :, 1], img_array[:, :, 2]
-            
-            # Check if any two channels are identical
-            if np.array_equal(r, g):
-                state.add_insight(
-                    "Red and Green channels are identical - unusual pattern",
-                    analyzer="image_analyzer"
-                )
-            
-            if np.array_equal(r, b):
-                state.add_insight(
-                    "Red and Blue channels are identical - unusual pattern",
-                    analyzer="image_analyzer"
-                )
-            
-            if np.array_equal(g, b):
-                state.add_insight(
-                    "Green and Blue channels are identical - unusual pattern",
-                    analyzer="image_analyzer"
-                )
-            
-            # Check for XOR relationship between channels
-            r_xor_g = r ^ g
-            unique_xor = np.unique(r_xor_g)
-            if len(unique_xor) < 5:
-                state.add_insight(
-                    f"Red XOR Green has only {len(unique_xor)} unique values - possible hidden data",
-                    analyzer="image_analyzer"
-                )
-                
-                # Extract XOR channel
-                xor_img = Image.fromarray(r_xor_g)
-                xor_buffer = io.BytesIO()
-                xor_img.save(xor_buffer, format="PNG")
-                
-                state.add_transformation(
-                    name="extract_r_xor_g",
-                    description="Extracted Red XOR Green channel",
-                    input_data=state.puzzle_data,
-                    output_data=xor_buffer.getvalue(),
-                    analyzer="image_analyzer"
-                )
-    
-    except Exception as e:
-        state.add_insight(f"Error analyzing color channels: {e}", analyzer="image_analyzer")
-    
-    return state
-
-
-@register_analyzer("check_pixel_patterns")
-@analyzer_compatibility(file_types=["png", "jpg", "jpeg", "gif", "bmp", "tiff"], requires_binary=True)
-def check_pixel_patterns(state: State) -> State:
-    """
-    Check for patterns in pixel data that might indicate hidden information.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_data or not PIL_AVAILABLE:
-        return state
-    
-    try:
-        # Load image
-        img_data = io.BytesIO(state.puzzle_data)
-        img = Image.open(img_data)
-        
-        # Check image size
-        width, height = img.size
-        
-        # Check for QR code-like patterns
-        if is_potential_qr_code(img):
+        if unusual_segments:
             state.add_insight(
-                "Image might contain a QR code or similar 2D barcode",
+                f"Found {len(unusual_segments)} unusual segments in JPEG file",
                 analyzer="image_analyzer"
             )
             
-            # Try to enhance potential QR code
-            enhanced_qr = enhance_qr_code(img)
+            # Add transformation with unusual segments
+            unusual_segment_info = "\n".join([
+                f"Marker: 0x{seg['marker']:02X}, Length: {len(seg['data'])} bytes"
+                for seg in unusual_segments
+            ])
             
-            if enhanced_qr:
-                qr_buffer = io.BytesIO()
-                enhanced_qr.save(qr_buffer, format="PNG")
+            state.add_transformation(
+                name="Unusual JPEG Segments",
+                description="Non-standard segments found in the JPEG file",
+                input_data=f"JPEG image ({state.file_size} bytes)",
+                output_data=unusual_segment_info,
+                analyzer="image_analyzer"
+            )
+        
+    except Exception as e:
+        state.add_insight(
+            f"Error analyzing JPEG header: {e}",
+            analyzer="image_analyzer"
+        )
+
+def analyze_gif_header(state: State) -> None:
+    """
+    Analyze GIF header without using PIL.
+    
+    Args:
+        state: Current puzzle state
+    """
+    try:
+        # Check for GIF signature
+        if not (state.binary_data.startswith(b"GIF87a") or state.binary_data.startswith(b"GIF89a")):
+            state.add_insight(
+                "File does not start with a valid GIF signature",
+                analyzer="image_analyzer"
+            )
+            return
+        
+        # Get GIF version
+        version = state.binary_data[3:6].decode("ascii")
+        
+        # Parse width and height
+        if len(state.binary_data) >= 14:
+            width = int.from_bytes(state.binary_data[6:8], byteorder="little")
+            height = int.from_bytes(state.binary_data[8:10], byteorder="little")
+            
+            state.add_insight(
+                f"GIF version: {version}, Dimensions: {width}x{height}",
+                analyzer="image_analyzer"
+            )
+        else:
+            state.add_insight(
+                f"GIF version: {version}, file may be truncated",
+                analyzer="image_analyzer"
+            )
+        
+        # Look for comments
+        comment_blocks = find_gif_comments(state.binary_data)
+        
+        if comment_blocks:
+            state.add_insight(
+                f"Found {len(comment_blocks)} comment blocks in GIF file",
+                analyzer="image_analyzer"
+            )
+            
+            # Add transformation with comments
+            comments_text = "\n".join([
+                f"Comment block {i+1}:\n{comment.decode('ascii', errors='replace')}"
+                for i, comment in enumerate(comment_blocks)
+            ])
+            
+            state.add_transformation(
+                name="GIF Comments",
+                description="Comment blocks found in the GIF file",
+                input_data=f"GIF image ({state.file_size} bytes)",
+                output_data=comments_text,
+                analyzer="image_analyzer"
+            )
+        
+        # Check for multiple frames
+        frame_count = count_gif_frames(state.binary_data)
+        
+        if frame_count > 1:
+            state.add_insight(
+                f"GIF contains {frame_count} frames (animated)",
+                analyzer="image_analyzer"
+            )
+        
+    except Exception as e:
+        state.add_insight(
+            f"Error analyzing GIF header: {e}",
+            analyzer="image_analyzer"
+        )
+
+def analyze_bmp_header(state: State) -> None:
+    """
+    Analyze BMP header without using PIL.
+    
+    Args:
+        state: Current puzzle state
+    """
+    try:
+        # Check for BMP signature
+        if not state.binary_data.startswith(b"BM"):
+            state.add_insight(
+                "File does not start with a valid BMP signature",
+                analyzer="image_analyzer"
+            )
+            return
+        
+        # Parse BMP header
+        if len(state.binary_data) >= 54:  # Minimum size for BMP header
+            # Get dimensions
+            width = int.from_bytes(state.binary_data[18:22], byteorder="little", signed=True)
+            height = int.from_bytes(state.binary_data[22:26], byteorder="little", signed=True)
+            
+            # Get bit depth
+            bit_depth = int.from_bytes(state.binary_data[28:30], byteorder="little")
+            
+            # Get compression method
+            compression = int.from_bytes(state.binary_data[30:34], byteorder="little")
+            compression_name = {
+                0: "BI_RGB (none)",
+                1: "BI_RLE8",
+                2: "BI_RLE4",
+                3: "BI_BITFIELDS",
+                4: "BI_JPEG",
+                5: "BI_PNG"
+            }.get(compression, f"Unknown ({compression})")
+            
+            state.add_insight(
+                f"BMP dimensions: {width}x{abs(height)}, Bit depth: {bit_depth}, Compression: {compression_name}",
+                analyzer="image_analyzer"
+            )
+            
+            # Check for unusual bit depths
+            if bit_depth not in [1, 4, 8, 16, 24, 32]:
+                state.add_insight(
+                    f"Unusual bit depth: {bit_depth}, may indicate hidden data",
+                    analyzer="image_analyzer"
+                )
+        else:
+            state.add_insight(
+                "BMP file too small to contain valid header",
+                analyzer="image_analyzer"
+            )
+        
+    except Exception as e:
+        state.add_insight(
+            f"Error analyzing BMP header: {e}",
+            analyzer="image_analyzer"
+        )
+
+def extract_text_from_image(state: State) -> None:
+    """
+    Extract potential text from the image.
+    
+    Args:
+        state: Current puzzle state
+    """
+    # Look for ASCII or UTF-8 text in the image data
+    try:
+        # Skip the header for common image formats
+        data = state.binary_data
+        header_size = 0
+        
+        if state.file_type == "png":
+            # Skip PNG signature and IHDR chunk
+            header_size = 24
+        elif state.file_type in ["jpg", "jpeg"]:
+            # JPEG has variable header size, just skip signature
+            header_size = 2
+        elif state.file_type == "gif":
+            # Skip GIF signature and logical screen descriptor
+            header_size = 13
+        elif state.file_type == "bmp":
+            # Skip BMP header
+            header_size = 54
+        
+        # Skip header if large enough
+        if len(data) > header_size:
+            data = data[header_size:]
+        
+        # Look for ASCII text
+        ascii_strings = find_strings(data, min_length=5)
+        
+        if ascii_strings:
+            state.add_insight(
+                f"Found {len(ascii_strings)} potential text strings in the image data",
+                analyzer="image_analyzer"
+            )
+            
+            # Filter out common image processing strings
+            filtered_strings = []
+            for string, _ in ascii_strings:
+                # Skip common strings found in image files
+                if not any(common in string.lower() for common in [
+                    "adobe", "photoshop", "gimp", "png", "jpeg", "exif", "http", "xml", "pict",
+                    "unicode", "apple", "windows", "microsoft"
+                ]):
+                    filtered_strings.append(string)
+            
+            if filtered_strings:
+                # Add transformation with extracted strings
+                if len(filtered_strings) > 20:
+                    # Too many strings, just show the first 20
+                    text = "\n".join(filtered_strings[:20]) + f"\n\n[...and {len(filtered_strings)-20} more...]"
+                else:
+                    text = "\n".join(filtered_strings)
                 
                 state.add_transformation(
-                    name="enhance_qr_code",
-                    description="Enhanced potential QR code",
-                    input_data=state.puzzle_data,
-                    output_data=qr_buffer.getvalue(),
+                    name="Image Text Extraction",
+                    description="Text strings found in the image data",
+                    input_data=f"Image file ({state.file_size} bytes)",
+                    output_data=text,
+                    analyzer="image_analyzer"
+                )
+    
+    except Exception as e:
+        state.add_insight(
+            f"Error extracting text from image: {e}",
+            analyzer="image_analyzer"
+        )
+
+def check_lsb_steganography(state: State) -> None:
+    """
+    Check for least significant bit (LSB) steganography.
+    
+    Args:
+        state: Current puzzle state
+    """
+    # Only perform LSB analysis if PIL is available
+    if not HAS_PIL:
+        return
+    
+    try:
+        # Open the image
+        image_data = io.BytesIO(state.binary_data)
+        image = Image.open(image_data)
+        
+        # Only analyze RGB images
+        if image.mode not in ["RGB", "RGBA"]:
+            return
+        
+        # Extract LSBs from some pixels
+        width, height = image.size
+        sample_size = min(1000, width * height)
+        
+        lsb_data = ""
+        
+        for i in range(sample_size):
+            # Get pixel coordinates
+            x = (i % width)
+            y = (i // width)
+            
+            # Get pixel value
+            pixel = image.getpixel((x, y))
+            
+            # Extract LSB from each channel
+            r_lsb = pixel[0] & 1
+            g_lsb = pixel[1] & 1
+            b_lsb = pixel[2] & 1
+            
+            # Append LSBs to data
+            lsb_data += str(r_lsb) + str(g_lsb) + str(b_lsb)
+        
+        # Analyze LSB data
+        # Check if LSBs form a pattern
+        if has_binary_pattern(lsb_data):
+            state.add_insight(
+                "Detected pattern in image LSBs, likely contains steganographic data",
+                analyzer="image_analyzer"
+            )
+            
+            # Try to interpret LSB data as ASCII
+            try:
+                # Group bits into bytes
+                lsb_bytes = []
+                for i in range(0, len(lsb_data), 8):
+                    if i + 8 <= len(lsb_data):
+                        byte = int(lsb_data[i:i+8], 2)
+                        lsb_bytes.append(byte)
+                
+                # Convert bytes to ASCII where possible
+                ascii_data = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in lsb_bytes)
+                
+                # Check if result contains readable text
+                if any(word in ascii_data.lower() for word in ["the", "and", "ing", "tion"]):
+                    state.add_insight(
+                        "LSB data appears to contain readable text",
+                        analyzer="image_analyzer"
+                    )
+                    
+                    state.add_transformation(
+                        name="LSB Steganography",
+                        description="Text extracted from least significant bits",
+                        input_data=f"Image file ({state.file_size} bytes)",
+                        output_data=ascii_data,
+                        analyzer="image_analyzer"
+                    )
+                else:
+                    # Show raw extracted bytes
+                    state.add_transformation(
+                        name="LSB Data",
+                        description="Data extracted from least significant bits",
+                        input_data=f"Image file ({state.file_size} bytes)",
+                        output_data=f"Binary: {lsb_data[:100]}...\nHex: {bytes(lsb_bytes).hex()[:100]}...",
+                        analyzer="image_analyzer"
+                    )
+            except Exception as e:
+                state.add_insight(
+                    f"Error interpreting LSB data: {e}",
                     analyzer="image_analyzer"
                 )
         
-        # Check for binary patterns in grayscale/1-bit images
-        if img.mode in ('L', '1'):
-            # Look for potential morse code or binary sequences
-            morse_like = detect_morse_like_pattern(img)
-            if morse_like:
-                state.add_insight(
-                    "Detected potential Morse code-like pattern in image",
-                    analyzer="image_analyzer",
-                    data=morse_like
-                )
+    except Exception as e:
+        state.add_insight(
+            f"Error checking for LSB steganography: {e}",
+            analyzer="image_analyzer"
+        )
+
+def check_embedded_files(state: State) -> None:
+    """
+    Check for embedded files in the image.
+    
+    Args:
+        state: Current puzzle state
+    """
+    try:
+        # Look for file signatures
+        data = state.binary_data
         
-        # Check for hidden messages in pixel coordinates
-        if width <= 1000 and height <= 1000:  # Only for reasonably sized images
-            coordinate_check = check_coordinates_for_message(img)
-            if coordinate_check['potential_message']:
-                state.add_insight(
-                    "Pixel coordinates might contain a hidden message",
-                    analyzer="image_analyzer",
-                    data=coordinate_check
-                )
+        # Common file signatures to look for
+        signatures = {
+            b"PK\x03\x04": "ZIP archive",
+            b"Rar!\x1A\x07": "RAR archive",
+            b"\x1F\x8B\x08": "GZIP file",
+            b"BZh": "BZIP2 file",
+            b"7z\xBC\xAF\x27\x1C": "7-Zip archive",
+            b"\x50\x4B\x03\x04\x14\x00\x06\x00": "DOCX/XLSX/PPTX file",
+            b"%PDF": "PDF document",
+            b"\xFF\xD8\xFF": "JPEG image",
+            b"\x89PNG\r\n\x1A\n": "PNG image",
+            b"GIF87a": "GIF image",
+            b"GIF89a": "GIF image",
+            b"ID3": "MP3 audio",
+            b"\x00\x00\x00\x18\x66\x74\x79\x70": "MP4 video"
+        }
+        
+        embedded_files = []
+        
+        for signature, file_type in signatures.items():
+            pos = data.find(signature)
+            
+            # Skip if signature is at the beginning (it's the image itself)
+            if pos > 0:
+                embedded_files.append((pos, file_type, signature))
+        
+        if embedded_files:
+            state.add_insight(
+                f"Found {len(embedded_files)} potential embedded files in the image",
+                analyzer="image_analyzer"
+            )
+            
+            # Add transformation with embedded file information
+            embedded_info = "\n".join([
+                f"Position: {pos} (0x{pos:X}), Type: {file_type}"
+                for pos, file_type, _ in embedded_files
+            ])
+            
+            state.add_transformation(
+                name="Embedded Files",
+                description="Potential embedded files found in the image",
+                input_data=f"Image file ({state.file_size} bytes)",
+                output_data=embedded_info,
+                analyzer="image_analyzer"
+            )
+            
+            # Try to extract the first embedded file
+            if embedded_files:
+                pos, file_type, signature = embedded_files[0]
                 
-                # Add transformation with the coordinate data
-                if 'message' in coordinate_check:
+                # For common archive formats, try to find the end
+                end_pos = None
+                if file_type == "ZIP archive":
+                    # Look for end of central directory record
+                    eocd_sig = b"\x50\x4B\x05\x06"
+                    eocd_pos = data.rfind(eocd_sig)
+                    if eocd_pos != -1:
+                        # End of ZIP is 22 bytes after EOCD signature
+                        end_pos = eocd_pos + 22
+                
+                # If end position found, extract the file
+                if end_pos and end_pos > pos:
+                    embedded_data = data[pos:end_pos]
+                    
                     state.add_transformation(
-                        name="extract_coordinate_message",
-                        description="Extracted message from pixel coordinates",
-                        input_data=state.puzzle_data,
-                        output_data=coordinate_check['message'],
+                        name=f"Extracted {file_type}",
+                        description=f"Embedded file extracted from position {pos}",
+                        input_data=f"Image file ({state.file_size} bytes)",
+                        output_data=f"Extracted {len(embedded_data)} bytes of {file_type} data at position {pos}.\n\nHex signature: {embedded_data[:16].hex()}",
                         analyzer="image_analyzer"
                     )
     
     except Exception as e:
-        state.add_insight(f"Error checking pixel patterns: {e}", analyzer="image_analyzer")
-    
-    return state
+        state.add_insight(
+            f"Error checking for embedded files: {e}",
+            analyzer="image_analyzer"
+        )
 
+# Utility functions
 
-# Helper functions
-
-def check_lsb_steganography(img: 'Image.Image') -> Dict[str, Any]:
+def parse_png_chunks(data: bytes) -> list:
     """
-    Check for potential LSB (Least Significant Bit) steganography.
+    Parse PNG file chunks.
     
     Args:
-        img: PIL Image
+        data: PNG file data
         
     Returns:
-        Dict with analysis results
+        List of chunks (each a dict with type and data)
     """
-    result = {
-        'potential_steganography': False,
-        'score': 0.0,
-        'reasons': []
-    }
+    if len(data) < 8 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return []
     
-    if not NUMPY_AVAILABLE:
-        return result
+    chunks = []
+    pos = 8  # Skip PNG signature
     
-    try:
-        # Convert to numpy array
-        img_array = np.array(img)
+    while pos < len(data):
+        if pos + 8 > len(data):
+            break
         
-        # Check if image is in an appropriate mode
-        if img.mode not in ('RGB', 'RGBA', 'L'):
-            result['reasons'].append("Image not in appropriate mode for LSB analysis")
-            return result
+        # Read chunk length and type
+        chunk_length = int.from_bytes(data[pos:pos+4], byteorder="big")
+        chunk_type = data[pos+4:pos+8].decode("ascii", errors="replace")
         
-        # Extract LSBs
-        if img.mode == 'L':
-            # Grayscale
-            lsb = img_array & 1
-        else:
-            # RGB/RGBA, check each channel
-            channels = []
-            for i in range(min(3, img_array.shape[2])):  # Only check RGB (not alpha)
-                channels.append(img_array[:, :, i] & 1)
-            lsb = np.stack(channels, axis=-1)
+        # Ensure chunk data doesn't exceed file size
+        if pos + 12 + chunk_length > len(data):
+            break
         
-        # Analyze LSB patterns
-        score = 0.0
+        # Read chunk data (excluding CRC)
+        chunk_data = data[pos+8:pos+8+chunk_length]
         
-        # Check for unusual LSB distribution
-        # In natural images, LSBs should be roughly 50% 0s and 50% 1s
-        if img.mode == 'L':
-            flat_lsb = lsb.flatten()
-            ones_ratio = np.sum(flat_lsb) / len(flat_lsb)
-            
-            # Check if ratio is far from 0.5
-            if abs(ones_ratio - 0.5) > 0.05:
-                score += 2.0
-                result['reasons'].append(f"Unusual LSB distribution: {ones_ratio:.2f} 1s (expected ~0.5)")
-            
-            # Check for patterns or structure in the LSBs
-            # Calculate the entropy of the LSB plane
-            entropy = calculate_image_entropy(lsb)
-            
-            # Lower entropy means more structure/patterns
-            if entropy < 7.5:  # Out of 8 possible bits
-                score += (7.5 - entropy) * 2
-                result['reasons'].append(f"LSB entropy ({entropy:.2f}) indicates potential structure")
-                
-            # Check for regions of constant LSB
-            regions = find_constant_regions(lsb)
-            if regions:
-                score += min(len(regions), 3)
-                result['reasons'].append(f"Found {len(regions)} regions of constant LSB value")
-        else:
-            # For RGB images, check each channel
-            channel_scores = []
-            for i in range(lsb.shape[2]):
-                channel_lsb = lsb[:, :, i]
-                flat_lsb = channel_lsb.flatten()
-                ones_ratio = np.sum(flat_lsb) / len(flat_lsb)
-                
-                channel_score = 0.0
-                
-                # Check ratio
-                if abs(ones_ratio - 0.5) > 0.05:
-                    channel_score += 2.0
-                
-                # Check entropy
-                entropy = calculate_image_entropy(channel_lsb)
-                if entropy < 7.5:
-                    channel_score += (7.5 - entropy) * 2
-                
-                # Check for regions
-                regions = find_constant_regions(channel_lsb)
-                if regions:
-                    channel_score += min(len(regions), 3)
-                
-                channel_scores.append(channel_score)
-            
-            # Use the maximum score from any channel
-            score = max(channel_scores)
-            if score > 3:
-                result['reasons'].append(f"Channel(s) show signs of LSB steganography")
+        chunks.append({
+            "type": chunk_type,
+            "data": chunk_data
+        })
         
-        # Set the final score and result
-        result['score'] = score
-        result['potential_steganography'] = score > 3.0
+        # Move to next chunk
+        pos += 12 + chunk_length  # 4 (length) + 4 (type) + chunk_length + 4 (CRC)
         
-        return result
+        # Stop if IEND chunk found
+        if chunk_type == "IEND":
+            break
     
-    except Exception as e:
-        logger.debug(f"Error in LSB steganography check: {e}")
-        result['reasons'].append(f"Error in analysis: {str(e)}")
-        return result
+    return chunks
 
-
-def extract_lsb_data(img: 'Image.Image', max_bytes: int = 1024) -> bytes:
+def parse_jpeg_segments(data: bytes) -> list:
     """
-    Extract data from the least significant bits of an image.
+    Parse JPEG file segments.
     
     Args:
-        img: PIL Image
-        max_bytes: Maximum bytes to extract
+        data: JPEG file data
         
     Returns:
-        Extracted data as bytes
+        List of segments (each a dict with marker and data)
     """
-    if not NUMPY_AVAILABLE:
-        raise ValueError("NumPy is required for LSB extraction")
+    if len(data) < 2 or not data.startswith(b"\xff\xd8"):
+        return []
     
-    # Convert to numpy array
-    img_array = np.array(img)
+    segments = []
+    pos = 2  # Skip JPEG signature
     
-    # Extract bits based on image mode
-    if img.mode == 'L':
-        # Grayscale
-        bits = img_array.flatten() & 1
-    else:
-        # RGB/RGBA
-        # Reshape to get all pixels as rows
-        reshaped = img_array.reshape(-1, img_array.shape[2])
-        # Extract LSB from each color channel
-        bits = reshaped & 1
-        # Flatten in the correct order (R1, G1, B1, R2, G2, B2, ...)
-        bits = bits.flatten()
+    while pos < len(data):
+        if data[pos] != 0xFF:
+            pos += 1
+            continue
+        
+        if pos + 1 >= len(data):
+            break
+        
+        marker = data[pos+1]
+        
+        # Skip padding markers
+        if marker == 0x00:
+            pos += 2
+            continue
+        
+        # Check if it's a standalone marker
+        if marker in [0xD9]:  # EOI marker
+            segments.append({
+                "marker": marker,
+                "data": b""
+            })
+            break
+        
+        # For other markers, read length
+        if pos + 4 > len(data):
+            break
+        
+        segment_length = int.from_bytes(data[pos+2:pos+4], byteorder="big")
+        
+        # Ensure segment doesn't exceed file size
+        if pos + 2 + segment_length > len(data):
+            break
+        
+        # Read segment data
+        segment_data = data[pos+4:pos+2+segment_length]
+        
+        segments.append({
+            "marker": marker,
+            "data": segment_data
+        })
+        
+        # Move to next segment
+        pos += 2 + segment_length  # 2 (marker) + segment_length
     
-    # Convert bits to bytes
-    num_bytes = min(len(bits) // 8, max_bytes)
-    extracted = bytearray(num_bytes)
-    
-    for i in range(num_bytes):
-        byte_bits = bits[i*8:(i+1)*8]
-        byte_val = 0
-        for j, bit in enumerate(byte_bits):
-            byte_val |= (bit << (7-j))
-        extracted[i] = byte_val
-    
-    return bytes(extracted)
+    return segments
 
-
-def is_potential_text(data: bytes) -> bool:
+def find_gif_comments(data: bytes) -> list:
     """
-    Check if binary data might be text.
+    Find comment blocks in a GIF file.
     
     Args:
-        data: Binary data
+        data: GIF file data
         
     Returns:
-        True if data might be text, False otherwise
+        List of comment block data
     """
-    # Count printable ASCII characters
-    printable_count = sum(32 <= b <= 126 for b in data)
+    if len(data) < 6 or not (data.startswith(b"GIF87a") or data.startswith(b"GIF89a")):
+        return []
     
-    # If more than 70% printable characters, it might be text
-    return printable_count / len(data) > 0.7 if data else False
-
-
-def check_for_watermark(img: 'Image.Image') -> Dict[str, Any]:
-    """
-    Check for visible watermarks or patterns in the image.
+    comments = []
+    pos = 13  # Skip GIF header and logical screen descriptor
     
-    Args:
-        img: PIL Image
-        
-    Returns:
-        Dict with analysis results
-    """
-    result = {
-        'potential_watermark': False,
-        'enhanced_watermark': None
-    }
+    # Skip global color table if present
+    if len(data) > 10 and (data[10] & 0x80):
+        color_table_size = 2 << (data[10] & 0x07)
+        pos += 3 * color_table_size
     
-    try:
-        # Convert image to grayscale for analysis
-        if img.mode != 'L':
-            gray_img = img.convert('L')
-        else:
-            gray_img = img
+    while pos < len(data):
+        if pos + 2 > len(data):
+            break
         
-        # Try various enhancement techniques
-        # 1. Increase contrast
-        enhancer = ImageEnhance.Contrast(gray_img)
-        enhanced1 = enhancer.enhance(3.0)
+        block_type = data[pos]
         
-        # 2. Auto-level (normalize histogram)
-        enhanced2 = ImageOps.autocontrast(gray_img, cutoff=0.5)
-        
-        # 3. Edge detection
-        enhanced3 = gray_img.filter(ImageFilter.EDGE_ENHANCE_MORE)
-        
-        # Check if any enhancement reveals a pattern
-        original_stats = ImageStat.Stat(gray_img)
-        enhanced1_stats = ImageStat.Stat(enhanced1)
-        enhanced2_stats = ImageStat.Stat(enhanced2)
-        enhanced3_stats = ImageStat.Stat(enhanced3)
-        
-        # Look for significant differences in statistics
-        if (abs(original_stats.stddev[0] - enhanced1_stats.stddev[0]) > original_stats.stddev[0] * 0.5 or
-            abs(original_stats.stddev[0] - enhanced2_stats.stddev[0]) > original_stats.stddev[0] * 0.5 or
-            abs(original_stats.stddev[0] - enhanced3_stats.stddev[0]) > original_stats.stddev[0] * 0.5):
+        # Extension block
+        if block_type == 0x21:
+            if pos + 2 > len(data):
+                break
             
-            result['potential_watermark'] = True
+            extension_type = data[pos+1]
             
-            # Use the enhancement with the biggest difference
-            diff1 = abs(original_stats.stddev[0] - enhanced1_stats.stddev[0])
-            diff2 = abs(original_stats.stddev[0] - enhanced2_stats.stddev[0])
-            diff3 = abs(original_stats.stddev[0] - enhanced3_stats.stddev[0])
-            
-            max_diff = max(diff1, diff2, diff3)
-            if max_diff == diff1:
-                result['enhanced_watermark'] = enhanced1
-            elif max_diff == diff2:
-                result['enhanced_watermark'] = enhanced2
+            # Comment extension
+            if extension_type == 0xFE:
+                comment_data = bytearray()
+                sub_pos = pos + 2
+                
+                while sub_pos < len(data):
+                    if sub_pos + 1 > len(data):
+                        break
+                    
+                    block_size = data[sub_pos]
+                    
+                    if block_size == 0:
+                        sub_pos += 1
+                        break
+                    
+                    if sub_pos + 1 + block_size > len(data):
+                        break
+                    
+                    comment_data.extend(data[sub_pos+1:sub_pos+1+block_size])
+                    sub_pos += 1 + block_size
+                
+                comments.append(bytes(comment_data))
+                pos = sub_pos
             else:
-                result['enhanced_watermark'] = enhanced3
+                # Skip other extension blocks
+                sub_pos = pos + 2
+                
+                while sub_pos < len(data):
+                    if sub_pos + 1 > len(data):
+                        break
+                    
+                    block_size = data[sub_pos]
+                    
+                    if block_size == 0:
+                        sub_pos += 1
+                        break
+                    
+                    sub_pos += 1 + block_size
+                
+                pos = sub_pos
         
-        return result
+        # Image descriptor
+        elif block_type == 0x2C:
+            # Skip image descriptor
+            pos += 10
+            
+            # Skip local color table if present
+            if pos < len(data) and (data[pos-1] & 0x80):
+                color_table_size = 2 << (data[pos-1] & 0x07)
+                pos += 3 * color_table_size
+            
+            # Skip image data
+            if pos + 1 > len(data):
+                break
+            
+            pos += 1  # Skip LZW minimum code size
+            
+            while pos < len(data):
+                if pos + 1 > len(data):
+                    break
+                
+                block_size = data[pos]
+                
+                if block_size == 0:
+                    pos += 1
+                    break
+                
+                pos += 1 + block_size
+        
+        # Trailer (end of GIF)
+        elif block_type == 0x3B:
+            break
+        
+        # Unknown block type
+        else:
+            pos += 1
     
-    except Exception as e:
-        logger.debug(f"Error checking for watermarks: {e}")
-        return result
+    return comments
 
-
-def extract_binary_channel(channel_array: np.ndarray, unique_values: np.ndarray) -> bytes:
+def count_gif_frames(data: bytes) -> int:
     """
-    Extract binary data from a channel with only two values.
+    Count the number of frames in a GIF file.
     
     Args:
-        channel_array: NumPy array of the channel
-        unique_values: The two unique values in the channel
+        data: GIF file data
         
     Returns:
-        Extracted binary data
+        Number of frames
     """
-    # Map the two values to 0 and 1
-    binary_map = {unique_values[0]: 0, unique_values[1]: 1}
+    if len(data) < 6 or not (data.startswith(b"GIF87a") or data.startswith(b"GIF89a")):
+        return 0
     
-    # Create binary array
-    flat_channel = channel_array.flatten()
-    bits = np.array([binary_map[val] for val in flat_channel])
+    frame_count = 0
+    pos = 13  # Skip GIF header and logical screen descriptor
     
-    # Convert bits to bytes
-    num_bytes = len(bits) // 8
-    extracted = bytearray(num_bytes)
+    # Skip global color table if present
+    if len(data) > 10 and (data[10] & 0x80):
+        color_table_size = 2 << (data[10] & 0x07)
+        pos += 3 * color_table_size
     
-    for i in range(num_bytes):
-        byte_bits = bits[i*8:(i+1)*8]
-        byte_val = 0
-        for j, bit in enumerate(byte_bits):
-            byte_val |= (bit << (7-j))
-        extracted[i] = byte_val
+    while pos < len(data):
+        if pos + 1 > len(data):
+            break
+        
+        block_type = data[pos]
+        
+        # Extension block
+        if block_type == 0x21:
+            if pos + 2 > len(data):
+                break
+            
+            extension_type = data[pos+1]
+            
+            # Skip extension blocks
+            sub_pos = pos + 2
+            
+            while sub_pos < len(data):
+                if sub_pos + 1 > len(data):
+                    break
+                
+                block_size = data[sub_pos]
+                
+                if block_size == 0:
+                    sub_pos += 1
+                    break
+                
+                sub_pos += 1 + block_size
+            
+            pos = sub_pos
+        
+        # Image descriptor (frame)
+        elif block_type == 0x2C:
+            frame_count += 1
+            
+            # Skip image descriptor
+            pos += 10
+            
+            # Skip local color table if present
+            if pos < len(data) and (data[pos-1] & 0x80):
+                color_table_size = 2 << (data[pos-1] & 0x07)
+                pos += 3 * color_table_size
+            
+            # Skip image data
+            if pos + 1 > len(data):
+                break
+            
+            pos += 1  # Skip LZW minimum code size
+            
+            while pos < len(data):
+                if pos + 1 > len(data):
+                    break
+                
+                block_size = data[pos]
+                
+                if block_size == 0:
+                    pos += 1
+                    break
+                
+                pos += 1 + block_size
+        
+        # Trailer (end of GIF)
+        elif block_type == 0x3B:
+            break
+        
+        # Unknown block type
+        else:
+            pos += 1
     
-    return bytes(extracted)
+    return frame_count
 
-
-def calculate_image_entropy(img_array: np.ndarray) -> float:
+def find_strings(data: bytes, min_length=4) -> list:
     """
-    Calculate the entropy of an image array.
+    Find ASCII strings in binary data.
     
     Args:
-        img_array: NumPy array of the image
+        data: Binary data to search
+        min_length: Minimum string length to consider
         
     Returns:
-        Entropy value
+        List of tuples (string, offset)
     """
-    # Calculate histogram
-    hist, _ = np.histogram(img_array, bins=256, range=(0, 256))
+    result = []
+    current_string = ""
+    string_start = -1
     
-    # Convert to probability
-    hist = hist / np.sum(hist)
+    for i, byte in enumerate(data):
+        if 32 <= byte <= 126:  # ASCII printable character
+            if string_start == -1:
+                string_start = i
+            current_string += chr(byte)
+        else:
+            if string_start != -1 and len(current_string) >= min_length:
+                result.append((current_string, string_start))
+            current_string = ""
+            string_start = -1
     
-    # Calculate entropy
-    entropy = -np.sum(hist * np.log2(hist + 1e-10))  # Add small epsilon to avoid log(0)
+    # Check if we have a string at the end
+    if string_start != -1 and len(current_string) >= min_length:
+        result.append((current_string, string_start))
     
-    return entropy
+    return result
 
-
-def find_constant_regions(img_array: np.ndarray, min_size: int = 100) -> List[Dict[str, Any]]:
+def check_lsb_pattern(pixels) -> bool:
     """
-    Find regions of constant value in an image array.
+    Check if the least significant bits of pixel values form a pattern.
     
     Args:
-        img_array: NumPy array of the image
-        min_size: Minimum region size to report
+        pixels: List of pixel values
         
     Returns:
-        List of regions with constant value
+        True if a pattern is detected, False otherwise
     """
-    # For simplicity, we'll use a basic algorithm
-    # More advanced would use connected component analysis
+    lsbs = []
     
-    # Find where the array is 0 and where it's 1
-    zeros = (img_array == 0)
-    ones = (img_array == 1)
-    
-    regions = []
-    
-    # Check for regions of 0s
-    zero_count = np.sum(zeros)
-    if zero_count > min_size:
-        regions.append({
-            "value": 0,
-            "size": int(zero_count),
-            "percent": float(zero_count / img_array.size)
-        })
-    
-    # Check for regions of 1s
-    one_count = np.sum(ones)
-    if one_count > min_size:
-        regions.append({
-            "value": 1,
-            "size": int(one_count),
-            "percent": float(one_count / img_array.size)
-        })
-    
-    return regions
-
-
-def is_potential_qr_code(img: 'Image.Image') -> bool:
-    """
-    Check if the image might contain a QR code.
-    
-    Args:
-        img: PIL Image
+    # Extract LSBs from pixel channels
+    for pixel in pixels:
+        # Skip if pixel is not iterable
+        if not hasattr(pixel, "__iter__"):
+            continue
         
-    Returns:
-        True if image might be a QR code, False otherwise
-    """
-    # Convert to grayscale
-    if img.mode != 'L':
-        gray_img = img.convert('L')
-    else:
-        gray_img = img
+        # Extract LSB from each channel
+        for channel in pixel:
+            lsbs.append(channel & 1)
     
-    # QR codes are square or nearly square
-    width, height = gray_img.size
-    if max(width, height) > min(width, height) * 1.2:
+    if len(lsbs) < 100:
         return False
     
-    # QR codes have high contrast and distinctive patterns
-    # Binarize the image
-    threshold = ImageStat.Stat(gray_img).mean[0]
-    binary_img = gray_img.point(lambda p: p > threshold and 255)
+    # Check for patterns in the LSBs
+    lsb_groups = [lsbs[i:i+8] for i in range(0, len(lsbs), 8) if i+8 <= len(lsbs)]
     
-    # Check for finder patterns (corners)
-    # This is a simplistic check, real QR detection is more complex
-    if NUMPY_AVAILABLE:
-        try:
-            binary_array = np.array(binary_img)
-            
-            # Check for high contrast regions
-            edges = binary_array[:-1, :] != binary_array[1:, :]
-            vertical_edges = np.sum(edges)
-            
-            edges = binary_array[:, :-1] != binary_array[:, 1:]
-            horizontal_edges = np.sum(edges)
-            
-            total_edges = vertical_edges + horizontal_edges
-            
-            # QR codes have a high edge density
-            edge_density = total_edges / (binary_array.shape[0] * binary_array.shape[1])
-            
-            return edge_density > 0.1
-        except:
-            pass
+    if not lsb_groups:
+        return False
     
-    # Fallback: check if the image is largely black and white
-    stat = ImageStat.Stat(binary_img)
-    extrema = stat.extrema[0]
-    if extrema[1] - extrema[0] > 200:  # High contrast
-        # Count black and white pixels
-        histogram = binary_img.histogram()
-        dark_pixels = sum(histogram[:50])  # Pixels with value 0-49
-        light_pixels = sum(histogram[200:])  # Pixels with value 200-255
+    # Convert groups to bytes
+    lsb_bytes = []
+    for group in lsb_groups:
+        byte = 0
+        for bit in group:
+            byte = (byte << 1) | bit
+        lsb_bytes.append(byte)
+    
+    # Check if the bytes form a pattern
+    return has_pattern(lsb_bytes)
+
+def has_pattern(data) -> bool:
+    """
+    Check if data has a pattern.
+    
+    Args:
+        data: List of values to check
         
-        total_pixels = width * height
+    Returns:
+        True if a pattern is detected, False otherwise
+    """
+    if len(data) < 20:
+        return False
+    
+    # Check if there are significantly fewer unique values than total values
+    unique_values = len(set(data))
+    if unique_values < len(data) / 3:
+        return True
+    
+    # Check for repeating sequences
+    for length in range(2, 8):
+        sequences = {}
+        for i in range(len(data) - length):
+            seq = tuple(data[i:i+length])
+            sequences[seq] = sequences.get(seq, 0) + 1
         
-        # QR codes have a good mix of black and white
-        dark_ratio = dark_pixels / total_pixels
-        light_ratio = light_pixels / total_pixels
-        
-        return dark_ratio > 0.2 and light_ratio > 0.2
+        # If any sequence repeats more than 3 times, consider it a pattern
+        if any(count > 3 for count in sequences.values()):
+            return True
     
     return False
 
-
-def enhance_qr_code(img: 'Image.Image') -> Optional['Image.Image']:
+def has_binary_pattern(binary_str: str) -> bool:
     """
-    Enhance a potential QR code in the image.
+    Check if a binary string has a pattern.
     
     Args:
-        img: PIL Image
+        binary_str: Binary string to check
         
     Returns:
-        Enhanced image or None if enhancement failed
+        True if a pattern is detected, False otherwise
     """
-    try:
-        # Convert to grayscale
-        if img.mode != 'L':
-            gray_img = img.convert('L')
-        else:
-            gray_img = img
-        
-        # Enhance contrast
-        contrast_img = ImageEnhance.Contrast(gray_img).enhance(2.0)
-        
-        # Binarize
-        threshold = ImageStat.Stat(contrast_img).mean[0]
-        binary_img = contrast_img.point(lambda p: p > threshold and 255)
-        
-        # Apply some morphological operations to clean up
-        binary_img = binary_img.filter(ImageFilter.MinFilter(3))
-        binary_img = binary_img.filter(ImageFilter.MaxFilter(3))
-        
-        return binary_img
-    except:
-        return None
+    if len(binary_str) < 32:
+        return False
+    
+    # Check if the distribution of 0s and 1s is balanced
+    zeros = binary_str.count('0')
+    ones = binary_str.count('1')
+    
+    # If distribution is very unbalanced, it's likely not random
+    if zeros > 0 and ones > 0 and (zeros / ones > 2 or ones / zeros > 2):
+        return False
+    
+    # Group bits into bytes
+    byte_groups = [binary_str[i:i+8] for i in range(0, len(binary_str), 8) if i+8 <= len(binary_str)]
+    
+    if not byte_groups:
+        return False
+    
+    # Convert to integers
+    bytes_data = [int(group, 2) for group in byte_groups]
+    
+    # Check for patterns in the bytes
+    return has_pattern(bytes_data)
 
-
-def detect_morse_like_pattern(img: 'Image.Image') -> Optional[Dict[str, Any]]:
+def calculate_std_dev(values: list) -> float:
     """
-    Detect potential Morse code-like patterns in the image.
+    Calculate standard deviation.
     
     Args:
-        img: PIL Image
+        values: List of values
         
     Returns:
-        Dict with analysis results or None if no pattern found
+        Standard deviation
     """
-    if not NUMPY_AVAILABLE:
-        return None
+    if not values:
+        return 0
     
-    try:
-        # Convert to grayscale and binarize
-        if img.mode != 'L':
-            gray_img = img.convert('L')
-        else:
-            gray_img = img
-        
-        # Binarize
-        threshold = ImageStat.Stat(gray_img).mean[0]
-        binary = gray_img.point(lambda p: p > threshold)
-        binary_array = np.array(binary) > 0  # True for white, False for black
-        
-        # Look for horizontal pattern
-        h_pattern = []
-        for row in range(binary_array.shape[0]):
-            # Get the middle row
-            if row == binary_array.shape[0] // 2:
-                row_vals = binary_array[row, :]
-                
-                # Convert to runs of black and white
-                runs = []
-                current_val = row_vals[0]
-                run_length = 1
-                
-                for val in row_vals[1:]:
-                    if val == current_val:
-                        run_length += 1
-                    else:
-                        runs.append((current_val, run_length))
-                        current_val = val
-                        run_length = 1
-                
-                runs.append((current_val, run_length))
-                
-                # Check if we have a reasonable number of runs
-                if 10 <= len(runs) <= 100:
-                    h_pattern = runs
-        
-        # Look for vertical pattern similarly
-        v_pattern = []
-        for col in range(binary_array.shape[1]):
-            if col == binary_array.shape[1] // 2:
-                col_vals = binary_array[:, col]
-                
-                runs = []
-                current_val = col_vals[0]
-                run_length = 1
-                
-                for val in col_vals[1:]:
-                    if val == current_val:
-                        run_length += 1
-                    else:
-                        runs.append((current_val, run_length))
-                        current_val = val
-                        run_length = 1
-                
-                runs.append((current_val, run_length))
-                
-                if 10 <= len(runs) <= 100:
-                    v_pattern = runs
-        
-        # Return the most promising pattern
-        if len(h_pattern) > len(v_pattern) and len(h_pattern) >= 10:
-            # Try to convert to Morse code
-            morse = runs_to_morse(h_pattern)
-            return {
-                "type": "horizontal",
-                "runs": [(bool(val), length) for val, length in h_pattern],
-                "morse": morse
-            }
-        elif len(v_pattern) >= 10:
-            morse = runs_to_morse(v_pattern)
-            return {
-                "type": "vertical",
-                "runs": [(bool(val), length) for val, length in v_pattern],
-                "morse": morse
-            }
-        
-        return None
-    except:
-        return None
-
-
-def runs_to_morse(runs: List[Tuple[bool, int]]) -> str:
-    """
-    Convert runs of black and white to potential Morse code.
-    
-    Args:
-        runs: List of (is_white, length) tuples
-        
-    Returns:
-        Morse code string
-    """
-    # Skip the first run if it's white (leading space)
-    if runs and runs[0][0]:
-        runs = runs[1:]
-    
-    # Skip the last run if it's white (trailing space)
-    if runs and runs[-1][0]:
-        runs = runs[:-1]
-    
-    # Group into black (marks) and white (spaces)
-    morse = []
-    
-    # Get the average run length for normalization
-    avg_length = sum(length for _, length in runs) / len(runs) if runs else 0
-    
-    for is_white, length in runs:
-        if not is_white:  # Black (mark)
-            if length < avg_length * 0.7:
-                morse.append(".")  # dot
-            else:
-                morse.append("-")  # dash
-        else:  # White (space)
-            if length > avg_length * 1.5:
-                morse.append(" ")  # word space
-    
-    return "".join(morse)
-
-
-def check_coordinates_for_message(img: 'Image.Image') -> Dict[str, Any]:
-    """
-    Check if pixel coordinates with specific values might form a message.
-    
-    Args:
-        img: PIL Image
-        
-    Returns:
-        Dict with analysis results
-    """
-    result = {
-        'potential_message': False
-    }
-    
-    if not NUMPY_AVAILABLE:
-        return result
-    
-    try:
-        # Convert to numpy array
-        img_array = np.array(img)
-        
-        # Get dimensions
-        if img_array.ndim == 3:
-            height, width, _ = img_array.shape
-        else:
-            height, width = img_array.shape
-        
-        # Look for pixels with unusual values
-        special_pixels = []
-        
-        if img_array.ndim == 3:
-            # For RGB/RGBA
-            # Look for primary colors
-            for y in range(height):
-                for x in range(width):
-                    pixel = img_array[y, x]
-                    
-                    # Check for red, green, blue, white, black
-                    if (pixel[0] > 200 and pixel[1] < 50 and pixel[2] < 50) or \
-                       (pixel[0] < 50 and pixel[1] > 200 and pixel[2] < 50) or \
-                       (pixel[0] < 50 and pixel[1] < 50 and pixel[2] > 200) or \
-                       (np.all(pixel[:3] > 240)) or \
-                       (np.all(pixel[:3] < 15)):
-                        special_pixels.append((x, y, tuple(pixel[:3])))
-                        
-                        if len(special_pixels) > 100:  # Limit to avoid too many
-                            break
-                
-                if len(special_pixels) > 100:
-                    break
-        else:
-            # For grayscale
-            for y in range(height):
-                for x in range(width):
-                    pixel = img_array[y, x]
-                    
-                    # Check for very dark or very bright
-                    if pixel < 15 or pixel > 240:
-                        special_pixels.append((x, y, pixel))
-                        
-                        if len(special_pixels) > 100:
-                            break
-                
-                if len(special_pixels) > 100:
-                    break
-        
-        # If we found a reasonable number of special pixels
-        if 5 <= len(special_pixels) <= 100:
-            result['potential_message'] = True
-            result['special_pixels'] = special_pixels
-            
-            # Extract coordinates and try to interpret as ASCII
-            coords = [(x, y) for x, y, _ in special_pixels]
-            
-            # Try both x and y as ASCII values
-            x_values = [x for x, _, _ in special_pixels]
-            y_values = [y for _, y, _ in special_pixels]
-            
-            # If values are in ASCII printable range
-            if all(32 <= x <= 126 for x in x_values):
-                ascii_message = ''.join(chr(x) for x in x_values)
-                if is_potential_text(ascii_message.encode('utf-8')):
-                    result['message'] = ascii_message
-            
-            elif all(32 <= y <= 126 for y in y_values):
-                ascii_message = ''.join(chr(y) for y in y_values)
-                if is_potential_text(ascii_message.encode('utf-8')):
-                    result['message'] = ascii_message
-        
-        return result
-    
-    except Exception as e:
-        logger.debug(f"Error checking coordinates for message: {e}")
-        return result
-
-
-# Import required modules at the top level
-try:
-    from PIL import Image, ImageStat, ImageEnhance, ImageOps, ImageFilter
-except ImportError:
-    pass  # PIL availability check done in module
+    mean = sum(values) / len(values)
+    variance = sum((x - mean) ** 2 for x in values) / len(values)
+    return math.sqrt(variance)
