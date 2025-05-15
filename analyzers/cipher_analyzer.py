@@ -1,1155 +1,987 @@
 """
-Cipher analyzer module for Crypto Hunter
-
-This module provides functions for detecting and solving
-various cryptographic ciphers like Caesar, Vigenère, substitution, etc.
+Cipher analyzer for Crypto Hunter.
+Detects and solves various classical ciphers.
 """
-import logging
+
 import re
 import string
-import math
-from typing import Dict, List, Any, Optional, Tuple, Union
-from collections import Counter
-
+import collections
+from itertools import cycle
 from core.state import State
 from analyzers.base import register_analyzer, analyzer_compatibility
 
-logger = logging.getLogger(__name__)
+# English letter frequency (most to least common)
+ENGLISH_FREQ = "ETAOINSRHDLUCMFYWGPBVKXQJZ".lower()
 
+# Common words for analyzing substitution ciphers
+COMMON_ENGLISH_WORDS = {
+    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i',
+    'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at',
+    'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she',
+    'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what',
+    'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me',
+    'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take'
+}
 
-@register_analyzer("cipher_analyze")
+@register_analyzer("cipher_analyzer")
 @analyzer_compatibility(requires_text=True)
-def analyze_cipher(state: State) -> State:
+def analyze_ciphers(state: State) -> State:
     """
-    Main cipher analyzer function that detects and solves various ciphers.
-
+    Detect and solve various classical ciphers in the text.
+    
     Args:
         state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        state.add_insight("No text data available for cipher analysis", analyzer="cipher_analyzer")
-        return state
-    
-    # Run various cipher analysis functions
-    state = detect_and_solve_caesar(state)
-    state = detect_and_solve_substitution(state)
-    state = detect_and_solve_vigenere(state)
-    state = detect_and_solve_transposition(state)
-    state = detect_and_solve_xor(state)
-    state = detect_and_solve_atbash(state)
-    state = detect_and_solve_railfence(state)
-    
-    return state
-
-
-@register_analyzer("detect_and_solve_caesar")
-@analyzer_compatibility(requires_text=True)
-def detect_and_solve_caesar(state: State) -> State:
-    """
-    Detect and solve Caesar cipher.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        return state
-    
-    text = state.puzzle_text.strip()
-    
-    # Skip if text is too short or has too many non-alphabetic characters
-    if len(text) < 10:
-        return state
-    
-    # Count alphabetic characters
-    alpha_count = sum(c.isalpha() for c in text)
-    if alpha_count / len(text) < 0.7:
-        return state
-    
-    # Try to detect the shift using frequency analysis
-    shift = detect_caesar_shift(text)
-    
-    if shift > 0:
-        # Apply the shift
-        deciphered = apply_caesar_shift(text, shift)
         
-        # Check if the result seems like readable text
-        if score_english_text(deciphered) > 0.6:
-            state.add_insight(
-                f"Text appears to be a Caesar cipher with shift {shift}",
-                analyzer="cipher_analyzer",
-                confidence=0.8
-            )
-            state.add_transformation(
-                name="caesar_decipher",
-                description=f"Deciphered Caesar cipher with shift {shift}",
-                input_data=text,
-                output_data=deciphered,
-                analyzer="cipher_analyzer"
-            )
-            
-            # Update puzzle text with deciphered text
-            state.puzzle_text = deciphered
-    
-    return state
-
-
-@register_analyzer("detect_and_solve_substitution")
-@analyzer_compatibility(requires_text=True)
-def detect_and_solve_substitution(state: State) -> State:
-    """
-    Detect and solve simple substitution cipher.
-
-    Args:
-        state: Current puzzle state
-
     Returns:
-        Updated state after analysis
+        Updated state
     """
     if not state.puzzle_text:
         return state
     
-    text = state.puzzle_text.strip()
+    text = state.puzzle_text
     
-    # Skip if text is too short or has too many non-alphabetic characters
-    if len(text) < 50:  # Need more text for frequency analysis
-        return state
+    state.add_insight(
+        "Starting classical cipher analysis",
+        analyzer="cipher_analyzer"
+    )
     
-    # Count alphabetic characters
-    alpha_text = ''.join(c for c in text if c.isalpha()).lower()
-    if len(alpha_text) < 50:
-        return state
+    # Analyze for various ciphers
+    analyze_caesar_cipher(state, text)
+    analyze_vigenere_cipher(state, text)
+    analyze_substitution_cipher(state, text)
+    analyze_transposition_cipher(state, text)
+    analyze_baconian_cipher(state, text)
+    analyze_atbash_cipher(state, text)
+    analyze_rail_fence_cipher(state, text)
+    analyze_xor_cipher(state, text)
     
-    # Check if frequency analysis suggests a substitution cipher
-    if is_likely_substitution_cipher(alpha_text):
-        # Try to solve using frequency analysis
-        mapping = solve_substitution_cipher(alpha_text)
+    # Check related files if any
+    if state.related_files:
+        state.add_insight(
+            f"Checking {len(state.related_files)} related files for cipher patterns",
+            analyzer="cipher_analyzer"
+        )
         
-        if mapping:
-            # Apply the mapping
-            deciphered = apply_substitution_mapping(text, mapping)
-            
-            # Check if the result seems like readable text
-            if score_english_text(deciphered) > 0.5:
+        for filename, file_info in state.related_files.items():
+            if file_info.get("text_content"):
+                related_text = file_info["text_content"]
                 state.add_insight(
-                    "Text appears to be a simple substitution cipher",
-                    analyzer="cipher_analyzer",
-                    confidence=0.7,
-                    data={"mapping": mapping}
-                )
-                state.add_transformation(
-                    name="substitution_decipher",
-                    description="Deciphered substitution cipher using frequency analysis",
-                    input_data=text,
-                    output_data=deciphered,
+                    f"Analyzing related file {filename} for cipher patterns",
                     analyzer="cipher_analyzer"
                 )
                 
-                # Update puzzle text with deciphered text
-                state.puzzle_text = deciphered
+                # Perform basic cipher checks on the related file
+                if len(related_text) > 20:  # Only analyze if there's enough text
+                    analyze_caesar_cipher(state, related_text, is_related=True, filename=filename)
     
     return state
 
-
-@register_analyzer("detect_and_solve_vigenere")
-@analyzer_compatibility(requires_text=True)
-def detect_and_solve_vigenere(state: State) -> State:
+def analyze_caesar_cipher(state: State, text: str, is_related=False, filename=None) -> None:
     """
-    Detect and solve Vigenère cipher.
-
+    Analyze text for potential Caesar cipher.
+    
     Args:
         state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
+        text: Text to analyze
+        is_related: Whether this is a related file
+        filename: Name of the related file (if applicable)
     """
-    if not state.puzzle_text:
-        return state
+    # Clean text to only include letters
+    text = text.lower()
+    clean_text = ''.join(c for c in text if c in string.ascii_lowercase)
     
-    text = state.puzzle_text.strip()
+    if len(clean_text) < 5:
+        return  # Not enough text to analyze
     
-    # Skip if text is too short
-    if len(text) < 50:
-        return state
+    # Calculate letter frequencies
+    letter_freq = collections.Counter(clean_text).most_common()
+    letter_freq = [letter for letter, _ in letter_freq if letter in string.ascii_lowercase]
     
-    # Count alphabetic characters
-    alpha_text = ''.join(c for c in text if c.isalpha())
-    if len(alpha_text) < 50:
-        return state
+    # Calculate most likely shift by comparing with English frequencies
+    # Assuming most common letter in English is 'e'
+    if not letter_freq:
+        return
     
-    # Check if it may be a Vigenère cipher
-    if is_likely_vigenere_cipher(alpha_text):
-        # Try to find the key length
-        key_length = find_vigenere_key_length(alpha_text)
-        
-        if key_length > 0:
-            # Try to find the key
-            key = find_vigenere_key(alpha_text, key_length)
-            
-            if key:
-                # Apply the key
-                deciphered = decrypt_vigenere(alpha_text, key)
-                
-                # Check if the result seems like readable text
-                if score_english_text(deciphered) > 0.5:
-                    state.add_insight(
-                        f"Text appears to be a Vigenère cipher with key '{key}'",
-                        analyzer="cipher_analyzer",
-                        confidence=0.7,
-                        data={"key": key, "key_length": key_length}
-                    )
-                    
-                    # Now decipher the original text (preserving non-alpha chars)
-                    full_deciphered = decrypt_vigenere_preserve_format(text, key)
-                    
-                    state.add_transformation(
-                        name="vigenere_decipher",
-                        description=f"Deciphered Vigenère cipher with key '{key}'",
-                        input_data=text,
-                        output_data=full_deciphered,
-                        analyzer="cipher_analyzer"
-                    )
-                    
-                    # Update puzzle text with deciphered text
-                    state.puzzle_text = full_deciphered
+    potential_shifts = []
+    top_letters = letter_freq[:3]  # Consider top 3 most frequent letters
     
-    return state
-
-
-@register_analyzer("detect_and_solve_transposition")
-@analyzer_compatibility(requires_text=True)
-def detect_and_solve_transposition(state: State) -> State:
-    """
-    Detect and solve transposition ciphers.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        return state
+    for cipher_letter in top_letters:
+        # Try common English letters e, t, a as the original
+        for plain_letter in 'eta':
+            shift = (ord(cipher_letter) - ord(plain_letter)) % 26
+            potential_shifts.append(shift)
     
-    text = state.puzzle_text.strip()
+    # Try all shifts and score them
+    shift_scores = {}
+    best_shift = None
+    best_score = -1
+    best_decoded = None
     
-    # Skip if text is too short
-    if len(text) < 20:
-        return state
-    
-    # Remove spaces for columnar transposition
-    clean_text = ''.join(c for c in text if not c.isspace())
-    
-    # Try different key lengths for columnar transposition
-    best_score = 0
-    best_key_length = 0
-    best_deciphered = ""
-    
-    # Try key lengths from 2 to sqrt(text_length)
-    max_key_length = min(20, int(math.sqrt(len(clean_text))))
-    
-    for key_length in range(2, max_key_length + 1):
-        deciphered = decrypt_columnar(clean_text, key_length)
-        score = score_english_text(deciphered)
-        
-        if score > best_score:
-            best_score = score
-            best_key_length = key_length
-            best_deciphered = deciphered
-    
-    # If we found a good key length
-    if best_score > 0.5:
-        state.add_insight(
-            f"Text appears to be a columnar transposition cipher with {best_key_length} columns",
-            analyzer="cipher_analyzer",
-            confidence=best_score,
-            data={"key_length": best_key_length}
-        )
-        state.add_transformation(
-            name="columnar_transposition_decipher",
-            description=f"Deciphered columnar transposition with {best_key_length} columns",
-            input_data=text,
-            output_data=best_deciphered,
-            analyzer="cipher_analyzer"
-        )
-        
-        # Update puzzle text with deciphered text
-        state.puzzle_text = best_deciphered
-    else:
-        # Try reversed text (simple transposition)
-        reversed_text = text[::-1]
-        score = score_english_text(reversed_text)
-        
-        if score > 0.5:
-            state.add_insight(
-                "Text appears to be reversed",
-                analyzer="cipher_analyzer",
-                confidence=score
-            )
-            state.add_transformation(
-                name="reverse_text",
-                description="Reversed the text",
-                input_data=text,
-                output_data=reversed_text,
-                analyzer="cipher_analyzer"
-            )
-            
-            # Update puzzle text with reversed text
-            state.puzzle_text = reversed_text
-        else:
-            # Try reading backwards by word
-            words = text.split()
-            reversed_words = ' '.join(words[::-1])
-            score = score_english_text(reversed_words)
-            
-            if score > 0.5:
-                state.add_insight(
-                    "Text appears to have words in reverse order",
-                    analyzer="cipher_analyzer",
-                    confidence=score
-                )
-                state.add_transformation(
-                    name="reverse_words",
-                    description="Reversed the word order",
-                    input_data=text,
-                    output_data=reversed_words,
-                    analyzer="cipher_analyzer"
-                )
-                
-                # Update puzzle text with reversed words
-                state.puzzle_text = reversed_words
-    
-    return state
-
-
-@register_analyzer("detect_and_solve_xor")
-@analyzer_compatibility(requires_text=True)
-def detect_and_solve_xor(state: State) -> State:
-    """
-    Detect and solve XOR cipher.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        return state
-    
-    # If the text is already binary data, analyze it
-    if state.puzzle_data:
-        data = state.puzzle_data
-        
-        # Try single-byte XOR keys
-        best_score = 0
-        best_key = 0
-        best_decrypted = b""
-        
-        for key in range(1, 256):
-            decrypted = bytes(b ^ key for b in data)
-            
-            # Check if the decrypted data might be text
-            if is_printable_text(decrypted):
-                try:
-                    decoded_text = decrypted.decode('utf-8', errors='replace')
-                    score = score_english_text(decoded_text)
-                    
-                    if score > best_score:
-                        best_score = score
-                        best_key = key
-                        best_decrypted = decrypted
-                except:
-                    pass
-        
-        # If we found a good key
-        if best_score > 0.5:
-            decoded_text = best_decrypted.decode('utf-8', errors='replace')
-            state.add_insight(
-                f"Binary data appears to be XOR encrypted with key 0x{best_key:02x}",
-                analyzer="cipher_analyzer",
-                confidence=best_score,
-                data={"key": best_key}
-            )
-            state.add_transformation(
-                name="single_byte_xor_decrypt",
-                description=f"Decrypted XOR with key 0x{best_key:02x}",
-                input_data=data,
-                output_data=decoded_text,
-                analyzer="cipher_analyzer"
-            )
-            
-            # Update puzzle text with decrypted text
-            state.puzzle_text = decoded_text
-        else:
-            # Try repeating-key XOR with short keys
-            for key_length in range(2, 5):  # Try keys of length 2-4
-                key = find_repeating_key_xor(data, key_length)
-                
-                if key:
-                    decrypted = decrypt_repeating_key_xor(data, key)
-                    
-                    # Check if the decrypted data might be text
-                    if is_printable_text(decrypted):
-                        try:
-                            decoded_text = decrypted.decode('utf-8', errors='replace')
-                            score = score_english_text(decoded_text)
-                            
-                            if score > 0.5:
-                                key_hex = ''.join(f'{b:02x}' for b in key)
-                                state.add_insight(
-                                    f"Binary data appears to be XOR encrypted with repeating key '{key_hex}'",
-                                    analyzer="cipher_analyzer",
-                                    confidence=score,
-                                    data={"key": key_hex}
-                                )
-                                state.add_transformation(
-                                    name="repeating_key_xor_decrypt",
-                                    description=f"Decrypted XOR with key '{key_hex}'",
-                                    input_data=data,
-                                    output_data=decoded_text,
-                                    analyzer="cipher_analyzer"
-                                )
-                                
-                                # Update puzzle text with decrypted text
-                                state.puzzle_text = decoded_text
-                                break
-                        except:
-                            pass
-    
-    # Try to convert text to byte array and analyze
-    else:
-        text = state.puzzle_text.strip()
-        
-        # Skip if text is too short
-        if len(text) < 10:
-            return state
-        
-        # Check if it looks like hex data
-        if all(c in string.hexdigits for c in text) and len(text) % 2 == 0:
-            try:
-                data = bytes.fromhex(text)
-                
-                # Recursive call with binary data
-                state.puzzle_data = data
-                return detect_and_solve_xor(state)
-            except:
-                pass
-    
-    return state
-
-
-@register_analyzer("detect_and_solve_atbash")
-@analyzer_compatibility(requires_text=True)
-def detect_and_solve_atbash(state: State) -> State:
-    """
-    Detect and solve Atbash cipher.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        return state
-    
-    text = state.puzzle_text.strip()
-    
-    # Skip if text is too short
-    if len(text) < 10:
-        return state
-    
-    # Count alphabetic characters
-    alpha_count = sum(c.isalpha() for c in text)
-    if alpha_count / len(text) < 0.7:
-        return state
-    
-    # Apply Atbash transformation
-    deciphered = apply_atbash(text)
-    
-    # Check if the result seems like readable text
-    score = score_english_text(deciphered)
-    
-    if score > 0.5:
-        state.add_insight(
-            "Text appears to be an Atbash cipher",
-            analyzer="cipher_analyzer",
-            confidence=score
-        )
-        state.add_transformation(
-            name="atbash_decipher",
-            description="Deciphered Atbash cipher",
-            input_data=text,
-            output_data=deciphered,
-            analyzer="cipher_analyzer"
-        )
-        
-        # Update puzzle text with deciphered text
-        state.puzzle_text = deciphered
-    
-    return state
-
-
-@register_analyzer("detect_and_solve_railfence")
-@analyzer_compatibility(requires_text=True)
-def detect_and_solve_railfence(state: State) -> State:
-    """
-    Detect and solve Rail Fence (Zig-zag) cipher.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        return state
-    
-    text = state.puzzle_text.strip()
-    
-    # Skip if text is too short
-    if len(text) < 15:
-        return state
-    
-    # Remove non-alphabetic characters
-    clean_text = ''.join(c for c in text if c.isalpha())
-    
-    # Try different rail counts
-    best_score = 0
-    best_rails = 0
-    best_deciphered = ""
-    
-    for rails in range(2, 11):  # Try 2-10 rails
-        deciphered = decrypt_railfence(clean_text, rails)
-        score = score_english_text(deciphered)
-        
-        if score > best_score:
-            best_score = score
-            best_rails = rails
-            best_deciphered = deciphered
-    
-    # If we found a good rail count
-    if best_score > 0.5:
-        state.add_insight(
-            f"Text appears to be a Rail Fence cipher with {best_rails} rails",
-            analyzer="cipher_analyzer",
-            confidence=best_score,
-            data={"rails": best_rails}
-        )
-        state.add_transformation(
-            name="railfence_decipher",
-            description=f"Deciphered Rail Fence cipher with {best_rails} rails",
-            input_data=text,
-            output_data=best_deciphered,
-            analyzer="cipher_analyzer"
-        )
-        
-        # Update puzzle text with deciphered text
-        state.puzzle_text = best_deciphered
-    
-    return state
-
-
-# Helper functions
-
-def detect_caesar_shift(text: str) -> int:
-    """
-    Detect the shift used in a Caesar cipher using frequency analysis.
-    
-    Args:
-        text: Ciphertext
-        
-    Returns:
-        Detected shift (0 if detection fails)
-    """
-    # English letter frequency (from most to least common)
-    english_frequent_letters = 'etaoinsrhdlucmfywgpbvkjxqz'
-    
-    # Count the frequency of each letter in the text
-    freq = Counter(c.lower() for c in text if c.isalpha())
-    
-    # Skip if we don't have enough letters
-    if len(freq) < 5:
-        return 0
-    
-    # Get the most common letter in the text
-    most_common = freq.most_common(1)[0][0]
-    
-    # Assume 'e' is the most common letter in English
-    for expected in 'etaoin':
-        # Calculate the shift to transform most_common to expected
-        shift = (ord(most_common) - ord(expected)) % 26
-        
-        # Apply the shift and check if it makes sense
-        deciphered = apply_caesar_shift(text, shift)
-        
-        if score_english_text(deciphered) > 0.5:
-            return shift
-    
-    # If no good match, try all shifts and pick the best one
-    best_score = 0
-    best_shift = 0
-    
-    for shift in range(1, 26):
-        deciphered = apply_caesar_shift(text, shift)
-        score = score_english_text(deciphered)
+    for shift in range(26):
+        decoded = caesar_decode(clean_text, shift)
+        score = score_english_text(decoded)
+        shift_scores[shift] = score
         
         if score > best_score:
             best_score = score
             best_shift = shift
+            best_decoded = decoded
     
-    return best_shift if best_score > 0.5 else 0
+    # Only report if the best score is good enough
+    prefix = f"Related file {filename}: " if is_related else ""
+    
+    if best_score > 0.4:  # Higher confidence
+        state.add_insight(
+            f"{prefix}Text appears to be a Caesar cipher with shift {best_shift}",
+            analyzer="cipher_analyzer"
+        )
+        
+        # Add transformation with the decoded text
+        source = f"Related file {filename}" if is_related else "Puzzle text"
+        state.add_transformation(
+            name=f"Caesar Cipher (Shift {best_shift})",
+            description=f"Decoded Caesar cipher from {source} with shift {best_shift}",
+            input_data=text[:100] + "..." if len(text) > 100 else text,
+            output_data=caesar_decode(text, best_shift),
+            analyzer="cipher_analyzer"
+        )
+    elif best_score > 0.2:  # Lower confidence
+        # Add all potential candidates
+        top_shifts = sorted(shift_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+        
+        # Only add top shifts with reasonable scores
+        candidates = [(shift, score) for shift, score in top_shifts if score > 0.1]
+        
+        if candidates:
+            state.add_insight(
+                f"{prefix}Text might be a Caesar cipher. Top candidate shifts: " + 
+                ", ".join([f"{s} (score: {sc:.2f})" for s, sc in candidates]),
+                analyzer="cipher_analyzer"
+            )
+            
+            # Add transformation for the best candidate
+            source = f"Related file {filename}" if is_related else "Puzzle text"
+            state.add_transformation(
+                name=f"Potential Caesar Cipher (Shift {best_shift})",
+                description=f"Potentially decoded Caesar cipher from {source} with shift {best_shift}",
+                input_data=text[:100] + "..." if len(text) > 100 else text,
+                output_data=caesar_decode(text, best_shift),
+                analyzer="cipher_analyzer"
+            )
+    else:
+        # Add all shifts as a transformation for manual inspection
+        all_shifts = ""
+        for shift in range(26):
+            all_shifts += f"Shift {shift}: {caesar_decode(text[:40], shift)}\n"
+        
+        source = f"Related file {filename}" if is_related else "Puzzle text"
+        state.add_transformation(
+            name="All Caesar Shifts",
+            description=f"All 26 possible Caesar shifts of {source} for manual inspection",
+            input_data=text[:100] + "..." if len(text) > 100 else text,
+            output_data=all_shifts,
+            analyzer="cipher_analyzer"
+        )
 
-
-def apply_caesar_shift(text: str, shift: int) -> str:
+def analyze_vigenere_cipher(state: State, text: str) -> None:
     """
-    Apply a Caesar shift to the text.
+    Analyze text for potential Vigenère cipher.
     
     Args:
-        text: Input text
-        shift: Shift value (1-25)
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # Clean text to only include letters
+    text = text.lower()
+    clean_text = ''.join(c for c in text if c in string.ascii_lowercase)
+    
+    if len(clean_text) < 20:
+        return  # Not enough text to analyze
+    
+    # Check for repeating sequences which can indicate key length
+    repeats = find_repeating_sequences(clean_text)
+    if not repeats:
+        return
+    
+    # Determine likely key lengths from the repeats
+    key_lengths = []
+    for seq, positions in repeats.items():
+        if len(positions) < 2:
+            continue
+        
+        # Calculate differences between positions
+        diffs = [positions[i+1] - positions[i] for i in range(len(positions)-1)]
+        
+        # Count potential key lengths based on greatest common divisor
+        for diff in diffs:
+            for length in range(2, 13):  # Check key lengths from 2 to 12
+                if diff % length == 0:
+                    key_lengths.append(length)
+    
+    # Count occurrences of each key length
+    key_length_counts = collections.Counter(key_lengths)
+    
+    if not key_length_counts:
+        return
+    
+    # Get the most likely key lengths
+    likely_key_lengths = key_length_counts.most_common(3)
+    
+    # Try to crack each likely key length
+    potential_keys = []
+    
+    for key_length, _ in likely_key_lengths:
+        # Split text into columns
+        columns = [''] * key_length
+        for i, char in enumerate(clean_text):
+            columns[i % key_length] += char
+        
+        # Find shift for each column (assume Caesar cipher)
+        key = ''
+        for column in columns:
+            # Find the most likely shift for this column
+            letter_freq = collections.Counter(column).most_common()
+            if not letter_freq:
+                continue
+                
+            # Assume the most common letter corresponds to 'e' in English
+            most_common = letter_freq[0][0]
+            shift = (ord(most_common) - ord('e')) % 26
+            key += chr(shift + ord('a'))
+        
+        # Decode with this key and score the result
+        decoded = vigenere_decode(clean_text, key)
+        score = score_english_text(decoded)
+        
+        potential_keys.append((key, score, decoded))
+    
+    # Sort by score
+    potential_keys.sort(key=lambda x: x[1], reverse=True)
+    
+    # Report findings
+    if potential_keys and potential_keys[0][1] > 0.3:
+        best_key, best_score, best_decoded = potential_keys[0]
+        
+        state.add_insight(
+            f"Text appears to be a Vigenère cipher with key '{best_key}'",
+            analyzer="cipher_analyzer"
+        )
+        
+        # Add transformation with the decoded text
+        state.add_transformation(
+            name=f"Vigenère Cipher (Key: {best_key})",
+            description=f"Decoded Vigenère cipher with key '{best_key}'",
+            input_data=text[:100] + "..." if len(text) > 100 else text,
+            output_data=vigenere_decode(text, best_key),
+            analyzer="cipher_analyzer"
+        )
+    elif potential_keys and potential_keys[0][1] > 0.1:
+        best_key, best_score, best_decoded = potential_keys[0]
+        
+        state.add_insight(
+            f"Text might be a Vigenère cipher. Potential key: '{best_key}' (score: {best_score:.2f})",
+            analyzer="cipher_analyzer"
+        )
+        
+        # Add transformation for the best candidate
+        state.add_transformation(
+            name=f"Potential Vigenère Cipher (Key: {best_key})",
+            description=f"Potentially decoded Vigenère cipher with key '{best_key}'",
+            input_data=text[:100] + "..." if len(text) > 100 else text,
+            output_data=vigenere_decode(text, best_key),
+            analyzer="cipher_analyzer"
+        )
+
+def analyze_substitution_cipher(state: State, text: str) -> None:
+    """
+    Analyze text for potential substitution cipher.
+    
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # Clean text to only include letters
+    text = text.lower()
+    clean_text = ''.join(c for c in text if c in string.ascii_lowercase)
+    
+    if len(clean_text) < 30:
+        return  # Not enough text to analyze
+    
+    # Calculate letter frequencies
+    letter_freq = collections.Counter(clean_text).most_common()
+    unique_letters = len([letter for letter, _ in letter_freq if letter in string.ascii_lowercase])
+    
+    # Check if it's a potential substitution cipher
+    if 10 <= unique_letters <= 26:
+        # Calculate frequency of each letter as a percentage
+        total_letters = sum(count for _, count in letter_freq)
+        freq_percentages = {letter: (count / total_letters) * 100 
+                            for letter, count in letter_freq}
+        
+        # Compare with English letter frequencies
+        english_freqs = {
+            'e': 12.02, 't': 9.10, 'a': 8.12, 'o': 7.68, 'i': 7.31,
+            'n': 6.95, 's': 6.28, 'r': 6.02, 'h': 5.92, 'd': 4.32,
+            'l': 3.98, 'u': 2.88, 'c': 2.71, 'm': 2.61, 'f': 2.30,
+            'y': 2.11, 'w': 2.09, 'g': 2.03, 'p': 1.82, 'b': 1.49,
+            'v': 1.11, 'k': 0.69, 'x': 0.17, 'q': 0.11, 'j': 0.10, 'z': 0.07
+        }
+        
+        # Create letter mapping based on frequency order
+        cipher_letters = [letter for letter, _ in letter_freq]
+        plain_letters = list(ENGLISH_FREQ)
+        
+        # Create a tentative mapping
+        mapping = {}
+        for i in range(min(len(cipher_letters), len(plain_letters))):
+            mapping[cipher_letters[i]] = plain_letters[i]
+        
+        # Apply mapping to decode
+        decoded = simple_substitution_decode(clean_text, mapping)
+        score = score_english_text(decoded)
+        
+        # Only report if likely
+        if score > 0.1:
+            state.add_insight(
+                "Text appears to be a simple substitution cipher",
+                analyzer="cipher_analyzer"
+            )
+            
+            # Create a mapping table for the transformation
+            mapping_table = "Cipher Letter -> Plain Letter\n"
+            for cipher_letter, plain_letter in mapping.items():
+                mapping_table += f"{cipher_letter} -> {plain_letter}\n"
+            
+            # Add transformation with the tentative decoding
+            state.add_transformation(
+                name="Substitution Cipher (Frequency Analysis)",
+                description="Tentative decoding based on letter frequency analysis",
+                input_data=text[:100] + "..." if len(text) > 100 else text,
+                output_data=f"Mapping:\n{mapping_table}\n\nDecoded text:\n{simple_substitution_decode(text, mapping)}",
+                analyzer="cipher_analyzer"
+            )
+
+def analyze_transposition_cipher(state: State, text: str) -> None:
+    """
+    Analyze text for potential transposition ciphers.
+    
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # Clean text to only include letters
+    text = text.lower()
+    clean_text = ''.join(c for c in text if c in string.ascii_lowercase)
+    
+    if len(clean_text) < 20:
+        return  # Not enough text to analyze
+    
+    # Check if length is a perfect square (for columnar or grid transposition)
+    from math import isqrt
+    
+    length = len(clean_text)
+    sqrt_len = isqrt(length)
+    
+    # Check for columnar transposition
+    state.add_insight(
+        "Checking for columnar transposition cipher patterns",
+        analyzer="cipher_analyzer"
+    )
+    
+    # Try different column counts
+    potential_cols = []
+    for cols in range(2, 11):  # Try 2 to 10 columns
+        if length % cols == 0:
+            potential_cols.append(cols)
+    
+    if potential_cols:
+        # Add transformation for columnar transposition attempts
+        output = "Potential Columnar Transpositions:\n\n"
+        
+        for cols in potential_cols:
+            rows = length // cols
+            
+            # Read by columns
+            columnar_decoded1 = ""
+            for r in range(rows):
+                for c in range(cols):
+                    index = c * rows + r
+                    if index < length:
+                        columnar_decoded1 += clean_text[index]
+            
+            # Read by columns, but column order may be different (try a simple ordering)
+            columnar_decoded2 = ""
+            col_order = list(range(cols))
+            col_order.reverse()  # Try reverse order
+            
+            for r in range(rows):
+                for c in col_order:
+                    index = c * rows + r
+                    if index < length:
+                        columnar_decoded2 += clean_text[index]
+            
+            # Score both attempts
+            score1 = score_english_text(columnar_decoded1)
+            score2 = score_english_text(columnar_decoded2)
+            
+            output += f"{cols} columns (read down, left-to-right) - Score: {score1:.2f}\n"
+            output += f"{columnar_decoded1[:50]}...\n\n"
+            
+            output += f"{cols} columns (read down, right-to-left) - Score: {score2:.2f}\n"
+            output += f"{columnar_decoded2[:50]}...\n\n"
+            
+            # Check if either appears to be correct
+            if score1 > 0.2 or score2 > 0.2:
+                state.add_insight(
+                    f"Text might be a columnar transposition cipher with {cols} columns",
+                    analyzer="cipher_analyzer"
+                )
+        
+        state.add_transformation(
+            name="Columnar Transposition Attempts",
+            description="Potential columnar transposition decodings",
+            input_data=text[:100] + "..." if len(text) > 100 else text,
+            output_data=output,
+            analyzer="cipher_analyzer"
+        )
+    
+    # Check for rail fence cipher
+    output = "Rail Fence Cipher Attempts:\n\n"
+    potential_rails = False
+    
+    for rails in range(2, 6):  # Try 2 to 5 rails
+        decoded = rail_fence_decode(clean_text, rails)
+        score = score_english_text(decoded)
+        
+        output += f"{rails} rails - Score: {score:.2f}\n"
+        output += f"{decoded[:50]}...\n\n"
+        
+        if score > 0.2:
+            state.add_insight(
+                f"Text might be a rail fence cipher with {rails} rails",
+                analyzer="cipher_analyzer"
+            )
+            potential_rails = True
+    
+    if potential_rails:
+        state.add_transformation(
+            name="Rail Fence Cipher Attempts",
+            description="Potential rail fence cipher decodings",
+            input_data=text[:100] + "..." if len(text) > 100 else text,
+            output_data=output,
+            analyzer="cipher_analyzer"
+        )
+
+def analyze_baconian_cipher(state: State, text: str) -> None:
+    """
+    Analyze text for potential Baconian cipher.
+    
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # Baconian cipher uses two distinct symbols (traditionally A and B)
+    # Check if text can be interpreted as binary
+    
+    # Clean text and look for binary-like patterns
+    clean_text = ''.join(c for c in text.lower() if c in 'ab01 \t\n').strip()
+    
+    if len(clean_text) < 20:
+        return  # Not enough text to analyze
+    
+    # Check if the text consists of primarily two symbols
+    char_counts = collections.Counter(clean_text)
+    main_chars = [c for c, count in char_counts.most_common() if c not in ' \t\n']
+    
+    if len(main_chars) == 2:
+        # Try to interpret as Baconian cipher
+        # Baconian cipher: A = "00000", B = "00001", ..., Z = "11001"
+        
+        # Map the two main characters to 0 and 1
+        char_map = {main_chars[0]: '0', main_chars[1]: '1'}
+        
+        # Convert text to binary
+        binary = ''.join(char_map.get(c, '') for c in clean_text)
+        
+        # Split into 5-bit groups
+        groups = [binary[i:i+5] for i in range(0, len(binary), 5) if i+5 <= len(binary)]
+        
+        # Convert to letters
+        baconian_map = {
+            '00000': 'a', '00001': 'b', '00010': 'c', '00011': 'd', '00100': 'e',
+            '00101': 'f', '00110': 'g', '00111': 'h', '01000': 'i', '01001': 'j',
+            '01010': 'k', '01011': 'l', '01100': 'm', '01101': 'n', '01110': 'o',
+            '01111': 'p', '10000': 'q', '10001': 'r', '10010': 's', '10011': 't',
+            '10100': 'u', '10101': 'v', '10110': 'w', '10111': 'x', '11000': 'y',
+            '11001': 'z'
+        }
+        
+        decoded = ''
+        for group in groups:
+            decoded += baconian_map.get(group, '?')
+        
+        # Check if this could be valid text
+        score = score_english_text(decoded)
+        
+        if score > 0.2:
+            state.add_insight(
+                f"Text might be a Baconian cipher using {main_chars[0]} and {main_chars[1]}",
+                analyzer="cipher_analyzer"
+            )
+            
+            state.add_transformation(
+                name="Baconian Cipher",
+                description=f"Decoded Baconian cipher (mapping {main_chars[0]}=0, {main_chars[1]}=1)",
+                input_data=text[:100] + "..." if len(text) > 100 else text,
+                output_data=decoded,
+                analyzer="cipher_analyzer"
+            )
+        
+        # Try the reverse mapping as well
+        char_map = {main_chars[0]: '1', main_chars[1]: '0'}
+        
+        # Convert text to binary
+        binary = ''.join(char_map.get(c, '') for c in clean_text)
+        
+        # Split into 5-bit groups
+        groups = [binary[i:i+5] for i in range(0, len(binary), 5) if i+5 <= len(binary)]
+        
+        # Convert to letters
+        decoded = ''
+        for group in groups:
+            decoded += baconian_map.get(group, '?')
+        
+        # Check if this could be valid text
+        score = score_english_text(decoded)
+        
+        if score > 0.2:
+            state.add_insight(
+                f"Text might be a Baconian cipher using {main_chars[0]} and {main_chars[1]} (reverse mapping)",
+                analyzer="cipher_analyzer"
+            )
+            
+            state.add_transformation(
+                name="Baconian Cipher (Reverse Mapping)",
+                description=f"Decoded Baconian cipher (mapping {main_chars[0]}=1, {main_chars[1]}=0)",
+                input_data=text[:100] + "..." if len(text) > 100 else text,
+                output_data=decoded,
+                analyzer="cipher_analyzer"
+            )
+
+def analyze_atbash_cipher(state: State, text: str) -> None:
+    """
+    Analyze text for potential Atbash cipher.
+    
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # Atbash cipher flips the alphabet (A->Z, B->Y, etc.)
+    # It's easy to check by just applying it and seeing if the result is readable
+    
+    # Clean text to only include letters
+    text = text.lower()
+    clean_text = ''.join(c for c in text if c in string.ascii_lowercase)
+    
+    if len(clean_text) < 10:
+        return  # Not enough text to analyze
+    
+    # Apply Atbash cipher
+    decoded = atbash_decode(clean_text)
+    score = score_english_text(decoded)
+    
+    if score > 0.2:
+        state.add_insight(
+            "Text appears to be encoded with an Atbash cipher",
+            analyzer="cipher_analyzer"
+        )
+        
+        state.add_transformation(
+            name="Atbash Cipher",
+            description="Decoded Atbash cipher (A->Z, B->Y, etc.)",
+            input_data=text[:100] + "..." if len(text) > 100 else text,
+            output_data=atbash_decode(text),
+            analyzer="cipher_analyzer"
+        )
+
+def analyze_rail_fence_cipher(state: State, text: str) -> None:
+    """
+    Analyze text for potential Rail Fence cipher.
+    This is handled by the transposition cipher analysis.
+    
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # This is now handled by analyze_transposition_cipher
+    pass
+
+def analyze_xor_cipher(state: State, text: str) -> None:
+    """
+    Analyze text for potential XOR cipher.
+    
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # XOR is typically used on binary data, but we can try on text too
+    
+    # Only analyze if the text looks like it might be hex or binary encoded
+    is_hex = all(c in string.hexdigits for c in text.strip())
+    is_binary = all(c in '01 \t\n' for c in text.strip())
+    
+    if not (is_hex or is_binary):
+        return
+    
+    state.add_insight(
+        "Text contains only hex or binary characters, checking for XOR cipher",
+        analyzer="cipher_analyzer"
+    )
+    
+    # If hex, convert to bytes
+    if is_hex:
+        try:
+            # Clean hex string
+            clean_hex = ''.join(c for c in text if c in string.hexdigits)
+            
+            # Pad if necessary
+            if len(clean_hex) % 2 == 1:
+                clean_hex = '0' + clean_hex
+            
+            # Convert to bytes
+            data = bytes.fromhex(clean_hex)
+            
+            # Try simple XOR keys
+            output = "XOR Cipher Attempts (Hex Input):\n\n"
+            
+            for key in range(1, 256):
+                xored = bytes([b ^ key for b in data])
+                
+                # See if the result is printable ASCII
+                printable_ratio = sum(32 <= b <= 126 for b in xored) / len(xored)
+                
+                if printable_ratio > 0.8:
+                    # Try to decode as text
+                    try:
+                        decoded = xored.decode('ascii', errors='replace')
+                        score = score_english_text(decoded)
+                        
+                        output += f"Key: {key} (0x{key:02X}) - Score: {score:.2f}\n"
+                        output += f"{decoded[:50]}...\n\n"
+                        
+                        if score > 0.2:
+                            state.add_insight(
+                                f"Text might be XOR encrypted with key {key} (0x{key:02X})",
+                                analyzer="cipher_analyzer"
+                            )
+                    except:
+                        pass
+            
+            state.add_transformation(
+                name="XOR Cipher Attempts (Hex Input)",
+                description="Potential XOR cipher decodings from hex input",
+                input_data=text[:100] + "..." if len(text) > 100 else text,
+                output_data=output,
+                analyzer="cipher_analyzer"
+            )
+        except:
+            state.add_insight(
+                "Error processing hex data for XOR analysis",
+                analyzer="cipher_analyzer"
+            )
+    
+    # If binary, convert to bytes and analyze
+    if is_binary:
+        try:
+            # Clean binary string
+            clean_binary = ''.join(c for c in text if c in '01')
+            
+            # Pad to whole bytes
+            remainder = len(clean_binary) % 8
+            if remainder != 0:
+                clean_binary = '0' * (8 - remainder) + clean_binary
+            
+            # Convert to bytes
+            data = bytes(int(clean_binary[i:i+8], 2) for i in range(0, len(clean_binary), 8))
+            
+            # Try simple XOR keys
+            output = "XOR Cipher Attempts (Binary Input):\n\n"
+            
+            for key in range(1, 256):
+                xored = bytes([b ^ key for b in data])
+                
+                # See if the result is printable ASCII
+                printable_ratio = sum(32 <= b <= 126 for b in xored) / len(xored)
+                
+                if printable_ratio > 0.8:
+                    # Try to decode as text
+                    try:
+                        decoded = xored.decode('ascii', errors='replace')
+                        score = score_english_text(decoded)
+                        
+                        output += f"Key: {key} (0x{key:02X}) - Score: {score:.2f}\n"
+                        output += f"{decoded[:50]}...\n\n"
+                        
+                        if score > 0.2:
+                            state.add_insight(
+                                f"Text might be XOR encrypted with key {key} (0x{key:02X})",
+                                analyzer="cipher_analyzer"
+                            )
+                    except:
+                        pass
+            
+            state.add_transformation(
+                name="XOR Cipher Attempts (Binary Input)",
+                description="Potential XOR cipher decodings from binary input",
+                input_data=text[:100] + "..." if len(text) > 100 else text,
+                output_data=output,
+                analyzer="cipher_analyzer"
+            )
+        except:
+            state.add_insight(
+                "Error processing binary data for XOR analysis",
+                analyzer="cipher_analyzer"
+            )
+
+# Utility functions
+
+def caesar_decode(text: str, shift: int) -> str:
+    """
+    Decode Caesar cipher with the given shift.
+    
+    Args:
+        text: Encoded text
+        shift: Shift value (0-25)
         
     Returns:
-        Shifted text
+        Decoded text
     """
-    result = []
+    result = ""
     
     for char in text:
         if char.isalpha():
             ascii_offset = ord('a') if char.islower() else ord('A')
-            shifted = chr((ord(char) - ascii_offset + shift) % 26 + ascii_offset)
-            result.append(shifted)
+            # Shift the character and wrap around the alphabet
+            result += chr((ord(char) - ascii_offset - shift) % 26 + ascii_offset)
         else:
-            result.append(char)
+            result += char
     
-    return ''.join(result)
+    return result
 
+def vigenere_decode(text: str, key: str) -> str:
+    """
+    Decode Vigenère cipher with the given key.
+    
+    Args:
+        text: Encoded text
+        key: Encryption key
+        
+    Returns:
+        Decoded text
+    """
+    result = ""
+    key_iter = cycle(key.lower())
+    
+    for char in text:
+        if char.isalpha():
+            ascii_offset = ord('a') if char.islower() else ord('A')
+            key_char = next(key_iter)
+            key_shift = ord(key_char) - ord('a')
+            # Apply the Vigenère decoding formula
+            result += chr((ord(char) - ascii_offset - key_shift) % 26 + ascii_offset)
+        else:
+            result += char
+            # Skip key iteration for non-alphabetic characters
+            next(key_iter)
+    
+    return result
+
+def simple_substitution_decode(text: str, mapping: dict) -> str:
+    """
+    Decode simple substitution cipher with the given mapping.
+    
+    Args:
+        text: Encoded text
+        mapping: Dictionary mapping cipher letters to plain letters
+        
+    Returns:
+        Decoded text
+    """
+    result = ""
+    
+    for char in text:
+        if char.lower() in mapping:
+            if char.isupper():
+                result += mapping[char.lower()].upper()
+            else:
+                result += mapping[char]
+        else:
+            result += char
+    
+    return result
+
+def rail_fence_decode(text: str, rails: int) -> str:
+    """
+    Decode Rail Fence cipher with the given number of rails.
+    
+    Args:
+        text: Encoded text
+        rails: Number of rails
+        
+    Returns:
+        Decoded text
+    """
+    if rails < 2:
+        return text
+    
+    # Create a 2D array for the rail fence
+    fence = [[''] * len(text) for _ in range(rails)]
+    
+    # Fill the fence
+    r, c = 0, 0
+    direction = 1  # 1 for down, -1 for up
+    
+    # Mark positions in the fence
+    for i in range(len(text)):
+        fence[r][c] = '*'
+        c += 1
+        r += direction
+        
+        # Change direction if needed
+        if r == rails - 1 or r == 0:
+            direction *= -1
+    
+    # Fill with the characters from the text
+    index = 0
+    for r in range(rails):
+        for c in range(len(text)):
+            if fence[r][c] == '*' and index < len(text):
+                fence[r][c] = text[index]
+                index += 1
+    
+    # Read in zig-zag pattern
+    result = ''
+    r, c = 0, 0
+    direction = 1
+    
+    for i in range(len(text)):
+        result += fence[r][c]
+        c += 1
+        r += direction
+        
+        if r == rails - 1 or r == 0:
+            direction *= -1
+    
+    return result
+
+def atbash_decode(text: str) -> str:
+    """
+    Decode Atbash cipher.
+    
+    Args:
+        text: Encoded text
+        
+    Returns:
+        Decoded text
+    """
+    result = ""
+    
+    for char in text:
+        if char.isalpha():
+            ascii_offset = ord('a') if char.islower() else ord('A')
+            # Flip the character in the alphabet
+            result += chr(ascii_offset + (25 - (ord(char) - ascii_offset)))
+        else:
+            result += char
+    
+    return result
+
+def find_repeating_sequences(text: str, min_length=3, max_length=5) -> dict:
+    """
+    Find repeating sequences in the text.
+    
+    Args:
+        text: Text to analyze
+        min_length: Minimum sequence length to consider
+        max_length: Maximum sequence length to consider
+        
+    Returns:
+        Dictionary mapping sequences to their positions
+    """
+    result = {}
+    
+    for length in range(min_length, max_length + 1):
+        for i in range(len(text) - length + 1):
+            seq = text[i:i+length]
+            
+            # Find all occurrences
+            positions = []
+            start = 0
+            while True:
+                pos = text.find(seq, start)
+                if pos == -1:
+                    break
+                positions.append(pos)
+                start = pos + 1
+            
+            # Only add if there are multiple occurrences
+            if len(positions) > 1:
+                result[seq] = positions
+    
+    return result
 
 def score_english_text(text: str) -> float:
     """
-    Score how likely a text is to be English.
+    Score text based on how likely it is to be valid English.
     
     Args:
         text: Text to score
         
     Returns:
-        Score between 0 and 1
+        Score from 0.0 to 1.0 (higher is more likely to be English)
     """
-    # Check for common English words
-    common_words = {
-        'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'it',
-        'for', 'not', 'on', 'with', 'as', 'you', 'do', 'at', 'this', 'but',
-        'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an',
-        'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so',
-        'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when'
+    # Clean text to only include letters and spaces
+    text = text.lower()
+    
+    # Check character frequency
+    char_counts = collections.Counter(text)
+    
+    # Calculate letter frequency score
+    freq_score = 0
+    english_freqs = {
+        'e': 12.02, 't': 9.10, 'a': 8.12, 'o': 7.68, 'i': 7.31,
+        'n': 6.95, 's': 6.28, 'r': 6.02, 'h': 5.92, 'd': 4.32,
+        'l': 3.98, 'u': 2.88, 'c': 2.71, 'm': 2.61, 'f': 2.30,
+        'y': 2.11, 'w': 2.09, 'g': 2.03, 'p': 1.82, 'b': 1.49,
+        'v': 1.11, 'k': 0.69, 'x': 0.17, 'q': 0.11, 'j': 0.10, 'z': 0.07
     }
     
-    # Split into words and normalize
-    words = re.findall(r'\b[a-z]+\b', text.lower())
-    
-    if not words:
+    total_chars = sum(count for char, count in char_counts.items() if char.isalpha())
+    if total_chars == 0:
         return 0
     
-    # Count words that are in the common_words set
-    found = sum(1 for word in words if word in common_words)
+    for char, freq in english_freqs.items():
+        actual_freq = char_counts.get(char, 0) / total_chars * 100 if total_chars > 0 else 0
+        freq_score += min(actual_freq, freq) / max(actual_freq, freq) if actual_freq > 0 and freq > 0 else 0
     
-    # Account for text length
-    if len(words) < 3:
-        return found / len(words) * 0.5  # Penalize very short texts
+    freq_score /= len(english_freqs)
     
-    # Score based on ratio of common words
-    return found / len(words) * min(len(words) / 10, 1.0)
-
-
-def is_likely_substitution_cipher(text: str) -> bool:
-    """
-    Check if a text is likely a simple substitution cipher.
+    # Check for common English words
+    words = text.split()
+    word_score = 0
     
-    Args:
-        text: Text to check
-        
-    Returns:
-        True if likely a substitution cipher, False otherwise
-    """
-    # Get frequency distribution
-    freq = Counter(text.lower())
+    for word in words:
+        if word in COMMON_ENGLISH_WORDS:
+            word_score += 1
     
-    # Skip if we don't have enough letters
-    if len(freq) < 10:
-        return False
+    word_score = word_score / len(words) if words else 0
     
-    # Check if the distribution looks like natural language
-    # (few very common letters, many uncommon letters)
-    values = sorted(freq.values(), reverse=True)
+    # Check for vowel/consonant ratio
+    vowels = sum(char_counts.get(c, 0) for c in 'aeiou')
+    vowel_ratio = vowels / total_chars if total_chars > 0 else 0
+    vowel_score = 1 - abs(vowel_ratio - 0.4) / 0.4  # 40% vowels is ideal
     
-    # Check if the top few letters are significantly more common
-    if len(values) >= 5:
-        ratio = sum(values[:5]) / sum(values)
-        return 0.3 <= ratio <= 0.7
+    # Combined score
+    combined_score = 0.5 * freq_score + 0.3 * word_score + 0.2 * vowel_score
     
-    return False
-
-
-def solve_substitution_cipher(text: str) -> Dict[str, str]:
-    """
-    Attempt to solve a simple substitution cipher using frequency analysis.
-    
-    Args:
-        text: Ciphertext
-        
-    Returns:
-        Mapping from ciphertext to plaintext letters
-    """
-    # English letter frequency (from most to least common)
-    english_freq_order = 'etaoinsrhdlucmfywgpbvkjxqz'
-    
-    # Count the frequency of each letter in the text
-    freq = Counter(text.lower())
-    
-    # Skip if we don't have enough letters
-    if len(freq) < 10:
-        return {}
-    
-    # Create a mapping based on frequency
-    cipher_freq_order = ''.join(letter for letter, _ in freq.most_common() if letter.isalpha())
-    
-    # Create the initial mapping
-    mapping = {}
-    for i, cipher_char in enumerate(cipher_freq_order):
-        if i < len(english_freq_order):
-            mapping[cipher_char] = english_freq_order[i]
-    
-    # Fill in any missing letters
-    for cipher_char in string.ascii_lowercase:
-        if cipher_char not in mapping:
-            for plain_char in string.ascii_lowercase:
-                if plain_char not in mapping.values():
-                    mapping[cipher_char] = plain_char
-                    break
-    
-    return mapping
-
-
-def apply_substitution_mapping(text: str, mapping: Dict[str, str]) -> str:
-    """
-    Apply a substitution mapping to text.
-    
-    Args:
-        text: Input text
-        mapping: Mapping from ciphertext to plaintext letters
-        
-    Returns:
-        Deciphered text
-    """
-    result = []
-    
-    for char in text:
-        if char.lower() in mapping:
-            mapped = mapping[char.lower()]
-            # Preserve case
-            if char.isupper():
-                result.append(mapped.upper())
-            else:
-                result.append(mapped)
-        else:
-            result.append(char)
-    
-    return ''.join(result)
-
-
-def is_likely_vigenere_cipher(text: str) -> bool:
-    """
-    Check if a text is likely a Vigenère cipher.
-    
-    Args:
-        text: Text to check
-        
-    Returns:
-        True if likely a Vigenère cipher, False otherwise
-    """
-    # Get frequency analysis for each position
-    counters = {}
-    for i, char in enumerate(text.lower()):
-        if char.isalpha():
-            pos = i % 10  # Use modulo 10 as a sample
-            if pos not in counters:
-                counters[pos] = Counter()
-            counters[pos][char] += 1
-    
-    # Check if different positions have different frequency distributions
-    if len(counters) < 3:
-        return False
-    
-    # Compute similarity between distributions
-    similarities = []
-    positions = sorted(counters.keys())
-    
-    for i in range(len(positions) - 1):
-        for j in range(i + 1, len(positions)):
-            pos1, pos2 = positions[i], positions[j]
-            counter1, counter2 = counters[pos1], counters[pos2]
-            
-            # Compare top 5 letters
-            top1 = set(letter for letter, _ in counter1.most_common(5))
-            top2 = set(letter for letter, _ in counter2.most_common(5))
-            
-            similarity = len(top1.intersection(top2)) / 5
-            similarities.append(similarity)
-    
-    # If positions have different distributions, it might be Vigenère
-    avg_similarity = sum(similarities) / len(similarities) if similarities else 1.0
-    return avg_similarity < 0.6
-
-
-def find_vigenere_key_length(text: str) -> int:
-    """
-    Find the key length of a Vigenère cipher using index of coincidence.
-    
-    Args:
-        text: Ciphertext
-        
-    Returns:
-        Most likely key length (0 if detection fails)
-    """
-    # Count only alphabetic characters
-    alpha_text = ''.join(c.lower() for c in text if c.isalpha())
-    
-    # Skip if we don't have enough letters
-    if len(alpha_text) < 20:
-        return 0
-    
-    # Try key lengths from 2 to 10
-    best_score = 0
-    best_length = 0
-    
-    for key_length in range(2, 11):
-        # Split text into columns based on key length
-        columns = [''] * key_length
-        for i, char in enumerate(alpha_text):
-            columns[i % key_length] += char
-        
-        # Calculate average index of coincidence for each column
-        ic_sum = 0
-        for column in columns:
-            if len(column) < 2:
-                continue
-                
-            # Count letter frequencies
-            freq = Counter(column)
-            
-            # Calculate index of coincidence
-            n = len(column)
-            sum_freq_squared = sum(count * (count - 1) for count in freq.values())
-            ic = sum_freq_squared / (n * (n - 1))
-            
-            ic_sum += ic
-        
-        avg_ic = ic_sum / key_length if key_length else 0
-        
-        # English has an IC of around 0.067, so higher is better
-        if avg_ic > best_score:
-            best_score = avg_ic
-            best_length = key_length
-    
-    # Require a minimum score (closer to English IC of 0.067)
-    return best_length if best_score > 0.05 else 0
-
-
-def find_vigenere_key(text: str, key_length: int) -> str:
-    """
-    Find the key of a Vigenère cipher given the key length.
-    
-    Args:
-        text: Ciphertext
-        key_length: Length of the key
-        
-    Returns:
-        Most likely key
-    """
-    # Count only alphabetic characters
-    alpha_text = ''.join(c.lower() for c in text if c.isalpha())
-    
-    # Skip if we don't have enough letters
-    if len(alpha_text) < key_length * 2:
-        return ""
-    
-    # Split text into columns based on key length
-    columns = [''] * key_length
-    for i, char in enumerate(alpha_text):
-        columns[i % key_length] += char
-    
-    # For each column, find the most likely Caesar shift
-    key = []
-    for column in columns:
-        shift = detect_caesar_shift(column)
-        
-        # Convert shift to letter (0 -> 'a', 1 -> 'b', etc.)
-        key_char = chr((26 - shift) % 26 + ord('a'))
-        key.append(key_char)
-    
-    return ''.join(key)
-
-
-def decrypt_vigenere(text: str, key: str) -> str:
-    """
-    Decrypt Vigenère cipher with a given key.
-    
-    Args:
-        text: Ciphertext
-        key: Decryption key
-        
-    Returns:
-        Decrypted text
-    """
-    result = []
-    key_pos = 0
-    
-    for char in text:
-        if char.isalpha():
-            # Get the shift for this position in the key
-            key_char = key[key_pos % len(key)]
-            key_pos += 1
-            
-            # Calculate shift value
-            shift = ord(key_char.lower()) - ord('a')
-            
-            # Apply reverse shift
-            ascii_offset = ord('a') if char.islower() else ord('A')
-            decrypted = chr((ord(char) - ascii_offset - shift) % 26 + ascii_offset)
-            result.append(decrypted)
-        else:
-            result.append(char)
-    
-    return ''.join(result)
-
-
-def decrypt_vigenere_preserve_format(text: str, key: str) -> str:
-    """
-    Decrypt Vigenère cipher preserving original format.
-    
-    Args:
-        text: Ciphertext
-        key: Decryption key
-        
-    Returns:
-        Decrypted text
-    """
-    result = []
-    key_pos = 0
-    
-    for char in text:
-        if char.isalpha():
-            # Get the shift for this position in the key
-            key_char = key[key_pos % len(key)]
-            key_pos += 1
-            
-            # Calculate shift value
-            shift = ord(key_char.lower()) - ord('a')
-            
-            # Apply reverse shift
-            ascii_offset = ord('a') if char.islower() else ord('A')
-            decrypted = chr((ord(char) - ascii_offset - shift) % 26 + ascii_offset)
-            result.append(decrypted)
-        else:
-            result.append(char)
-    
-    return ''.join(result)
-
-
-def decrypt_columnar(text: str, key_length: int) -> str:
-    """
-    Decrypt columnar transposition with a given key length.
-    
-    Args:
-        text: Ciphertext
-        key_length: Number of columns
-        
-    Returns:
-        Decrypted text
-    """
-    # Calculate number of rows
-    text_length = len(text)
-    rows = text_length // key_length
-    if text_length % key_length != 0:
-        rows += 1
-    
-    # Create the grid
-    grid = [[''] * key_length for _ in range(rows)]
-    
-    # Fill the grid
-    for i, char in enumerate(text):
-        col = i // rows
-        row = i % rows
-        if col < key_length:
-            grid[row][col] = char
-    
-    # Read by rows
-    result = []
-    for row in grid:
-        result.extend(row)
-    
-    return ''.join(result)
-
-
-def is_printable_text(data: bytes, threshold: float = 0.8) -> bool:
-    """
-    Check if binary data is likely printable text.
-    
-    Args:
-        data: Binary data to check
-        threshold: Minimum ratio of printable characters
-        
-    Returns:
-        True if likely text, False otherwise
-    """
-    if not data:
-        return False
-    
-    # Count printable characters
-    printable_count = sum(32 <= b <= 126 or b in (9, 10, 13) for b in data)
-    
-    # Calculate ratio
-    ratio = printable_count / len(data)
-    
-    return ratio >= threshold
-
-
-def find_repeating_key_xor(data: bytes, key_length: int) -> bytes:
-    """
-    Find a repeating-key XOR key of the given length.
-    
-    Args:
-        data: Encrypted data
-        key_length: Length of the key
-        
-    Returns:
-        Key bytes or empty if detection fails
-    """
-    # Split data into blocks based on key position
-    blocks = [b'' for _ in range(key_length)]
-    for i, byte in enumerate(data):
-        blocks[i % key_length] += bytes([byte])
-    
-    # Solve each block as a single-byte XOR
-    key = bytearray()
-    for block in blocks:
-        best_score = 0
-        best_key_byte = 0
-        
-        for key_byte in range(1, 256):
-            decrypted = bytes(b ^ key_byte for b in block)
-            
-            # Check if the decrypted data might be text
-            if is_printable_text(decrypted):
-                try:
-                    decoded_text = decrypted.decode('utf-8', errors='replace')
-                    score = score_english_text(decoded_text)
-                    
-                    if score > best_score:
-                        best_score = score
-                        best_key_byte = key_byte
-                except:
-                    pass
-        
-        if best_score > 0.2:  # Use a lower threshold for individual blocks
-            key.append(best_key_byte)
-        else:
-            return b''  # Failed to find a good key
-    
-    return bytes(key)
-
-
-def decrypt_repeating_key_xor(data: bytes, key: bytes) -> bytes:
-    """
-    Decrypt data encrypted with repeating-key XOR.
-    
-    Args:
-        data: Encrypted data
-        key: Decryption key
-        
-    Returns:
-        Decrypted data
-    """
-    decrypted = bytearray()
-    
-    for i, byte in enumerate(data):
-        key_byte = key[i % len(key)]
-        decrypted.append(byte ^ key_byte)
-    
-    return bytes(decrypted)
-
-
-def apply_atbash(text: str) -> str:
-    """
-    Apply Atbash cipher (reverse alphabet).
-    
-    Args:
-        text: Input text
-        
-    Returns:
-        Transformed text
-    """
-    result = []
-    
-    for char in text:
-        if char.islower():
-            result.append(chr(219 - ord(char)))  # 219 = ord('a') + ord('z')
-        elif char.isupper():
-            result.append(chr(155 - ord(char)))  # 155 = ord('A') + ord('Z')
-        else:
-            result.append(char)
-    
-    return ''.join(result)
-
-
-def decrypt_railfence(text: str, rails: int) -> str:
-    """
-    Decrypt Rail Fence (Zig-zag) cipher.
-    
-    Args:
-        text: Ciphertext
-        rails: Number of rails
-        
-    Returns:
-        Decrypted text
-    """
-    if rails < 2 or len(text) <= rails:
-        return text
-    
-    # Create the fence pattern
-    fence = [[''] * len(text) for _ in range(rails)]
-    
-    # Fill the fence with markers
-    rail = 0
-    direction = 1
-    for i in range(len(text)):
-        fence[rail][i] = '*'
-        rail += direction
-        if rail == rails - 1 or rail == 0:
-            direction *= -1
-    
-    # Fill the fence with the ciphertext
-    index = 0
-    for r in range(rails):
-        for c in range(len(text)):
-            if fence[r][c] == '*':
-                fence[r][c] = text[index]
-                index += 1
-    
-    # Read off the fence
-    result = []
-    rail = 0
-    direction = 1
-    for i in range(len(text)):
-        result.append(fence[rail][i])
-        rail += direction
-        if rail == rails - 1 or rail == 0:
-            direction *= -1
-    
-    return ''.join(result)
+    return combined_score

@@ -1,668 +1,363 @@
 """
-Text analyzer module for Crypto Hunter
-
-This module provides functions for analyzing and decoding text-based cryptographic puzzles.
+Text analyzer for Crypto Hunter.
+Analyzes text patterns to identify potential encodings and ciphers.
 """
-import logging
+
 import re
 import string
-import base64
-import binascii
-from typing import Dict, List, Any, Optional, Tuple, Union
-from collections import Counter
-
+import collections
 from core.state import State
 from analyzers.base import register_analyzer, analyzer_compatibility
 
-logger = logging.getLogger(__name__)
-
-
-@register_analyzer("text_analyze")
+@register_analyzer("text_analyzer")
 @analyzer_compatibility(requires_text=True)
 def analyze_text(state: State) -> State:
     """
-    Main text analyzer function that orchestrates text analysis.
-
+    Analyze text patterns to identify potential encodings and ciphers.
+    
     Args:
         state: Current puzzle state
-
+        
     Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        state.add_insight("No text data available for analysis", analyzer="text_analyzer")
-        return state
-    
-    # Run various text analysis functions
-    state = detect_encodings(state)
-    state = analyze_character_frequency(state)
-    state = identify_cipher_type(state)
-    state = extract_patterns(state)
-    
-    return state
-
-
-@register_analyzer("detect_encodings")
-@analyzer_compatibility(requires_text=True)
-def detect_encodings(state: State) -> State:
-    """
-    Detect common encoding schemes in the text.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
+        Updated state
     """
     if not state.puzzle_text:
         return state
     
-    text = state.puzzle_text.strip()
+    text = state.puzzle_text
     
-    # Check for Base64 encoding
-    if is_base64(text):
-        state.add_insight("Text appears to be Base64 encoded", analyzer="text_analyzer")
-        try:
-            decoded = base64.b64decode(text).decode('utf-8')
-            state.add_transformation(
-                name="base64_decode",
-                description="Decoded Base64 to text",
-                input_data=text,
-                output_data=decoded,
-                analyzer="text_analyzer"
-            )
-            state.puzzle_text = decoded
-        except Exception as e:
-            state.add_insight(f"Failed to decode Base64: {e}", analyzer="text_analyzer")
-    
-    # Check for Hex encoding
-    elif is_hex(text):
-        state.add_insight("Text appears to be hex encoded", analyzer="text_analyzer")
-        try:
-            decoded = bytes.fromhex(text).decode('utf-8')
-            state.add_transformation(
-                name="hex_decode",
-                description="Decoded hex to text",
-                input_data=text,
-                output_data=decoded,
-                analyzer="text_analyzer"
-            )
-            state.puzzle_text = decoded
-        except Exception as e:
-            state.add_insight(f"Failed to decode hex: {e}", analyzer="text_analyzer")
-    
-    # Check for ASCII85/Base85 encoding
-    elif is_ascii85(text):
-        state.add_insight("Text might be ASCII85/Base85 encoded", analyzer="text_analyzer")
-        try:
-            # Try to decode as ASCII85
-            decoded = base64.a85decode(text).decode('utf-8')
-            state.add_transformation(
-                name="ascii85_decode",
-                description="Decoded ASCII85 to text",
-                input_data=text,
-                output_data=decoded,
-                analyzer="text_analyzer"
-            )
-            state.puzzle_text = decoded
-        except Exception as e:
-            state.add_insight(f"Failed to decode ASCII85: {e}", analyzer="text_analyzer")
-    
-    # Check for URL encoding
-    elif '%' in text and is_url_encoded(text):
-        state.add_insight("Text appears to be URL encoded", analyzer="text_analyzer")
-        try:
-            import urllib.parse
-            decoded = urllib.parse.unquote(text)
-            state.add_transformation(
-                name="url_decode",
-                description="Decoded URL encoding to text",
-                input_data=text,
-                output_data=decoded,
-                analyzer="text_analyzer"
-            )
-            state.puzzle_text = decoded
-        except Exception as e:
-            state.add_insight(f"Failed to decode URL encoding: {e}", analyzer="text_analyzer")
-    
-    # Check for Binary encoding
-    elif is_binary(text):
-        state.add_insight("Text appears to be binary encoded", analyzer="text_analyzer")
-        try:
-            # Convert binary to ASCII
-            binary_values = text.split()
-            decoded = ''.join([chr(int(binary, 2)) for binary in binary_values])
-            state.add_transformation(
-                name="binary_decode",
-                description="Decoded binary to text",
-                input_data=text,
-                output_data=decoded,
-                analyzer="text_analyzer"
-            )
-            state.puzzle_text = decoded
-        except Exception as e:
-            state.add_insight(f"Failed to decode binary: {e}", analyzer="text_analyzer")
-    
-    # Check for ROT13 encoding
-    rot13_decoded = apply_rot13(text)
-    if is_english_like(rot13_decoded) and not is_english_like(text):
-        state.add_insight("Text appears to be ROT13 encoded", analyzer="text_analyzer")
-        state.add_transformation(
-            name="rot13_decode",
-            description="Decoded ROT13 to text",
-            input_data=text,
-            output_data=rot13_decoded,
-            analyzer="text_analyzer"
-        )
-        state.puzzle_text = rot13_decoded
-    
-    return state
-
-
-@register_analyzer("analyze_character_frequency")
-@analyzer_compatibility(requires_text=True)
-def analyze_character_frequency(state: State) -> State:
-    """
-    Analyze character frequency in the text for cryptanalysis.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        return state
-    
-    text = state.puzzle_text.strip()
-    
-    # Skip if text is too short
-    if len(text) < 20:
-        return state
-    
-    # Compute character frequency
-    chars = [c for c in text if c.isalpha()]
-    freq = Counter(chars)
-    total = len(chars)
-    
-    if not total:
-        return state
-    
-    # Compute frequency percentages
-    freq_percent = {char: (count / total) * 100 for char, count in freq.items()}
-    
-    # Get the most common characters
-    most_common = freq.most_common(5)
-    
-    # English letter frequency (approximate)
-    english_freq = {
-        'e': 12.02, 't': 9.10, 'a': 8.12, 'o': 7.68, 'i': 7.31,
-        'n': 6.95, 's': 6.28, 'r': 6.02, 'h': 5.92, 'd': 4.32,
-        'l': 3.98, 'u': 2.88, 'c': 2.71, 'm': 2.61, 'f': 2.30,
-        'y': 2.11, 'w': 2.09, 'g': 2.03, 'p': 1.82, 'b': 1.49,
-        'v': 1.11, 'k': 0.69, 'x': 0.17, 'q': 0.11, 'j': 0.10, 'z': 0.07
-    }
-    
-    # Add insights about frequency analysis
+    # Add insight about starting analysis
     state.add_insight(
-        f"Character frequency analysis: most common letters are {', '.join([f'{c[0]} ({c[1]})' for c in most_common])}",
-        analyzer="text_analyzer",
-        data={"frequency": {k: v for k, v in freq_percent.items()}}
+        f"Starting text analysis of {len(text)} characters",
+        analyzer="text_analyzer"
     )
     
-    # Check if this might be a substitution cipher
-    if set(freq_percent.keys()).issubset(set(string.ascii_letters)):
+    # Analyze text characteristics
+    analyze_character_distribution(state, text)
+    analyze_word_patterns(state, text)
+    analyze_potential_encodings(state, text)
+    analyze_line_patterns(state, text)
+    
+    # Check related files if any
+    if state.related_files:
         state.add_insight(
-            "Character frequency suggests this might be a substitution cipher",
+            f"Checking {len(state.related_files)} related files for text patterns",
             analyzer="text_analyzer"
         )
         
-        # Try to match with English letter frequency for simple substitution
-        if len(freq_percent) >= 20 and all(c.islower() for c in freq_percent.keys()):
-            mapping = {}
-            for char, _ in sorted(freq_percent.items(), key=lambda x: x[1], reverse=True):
-                english_char = sorted(english_freq.items(), key=lambda x: x[1], reverse=True)[len(mapping)][0]
-                mapping[char] = english_char
-                if len(mapping) >= len(english_freq):
-                    break
-            
-            # Apply the mapping
-            decoded = ''.join(mapping.get(c, c) for c in text)
-            state.add_transformation(
-                name="frequency_substitution",
-                description="Applied frequency-based substitution",
-                input_data=text,
-                output_data=decoded,
-                analyzer="text_analyzer"
-            )
-    
-    return state
-
-
-@register_analyzer("identify_cipher_type")
-@analyzer_compatibility(requires_text=True)
-def identify_cipher_type(state: State) -> State:
-    """
-    Attempt to identify the type of cipher used in the text.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        return state
-    
-    text = state.puzzle_text.strip()
-    
-    # Apply common cipher detection techniques
-    
-    # Check for Caesar cipher
-    likely_shift = detect_caesar_shift(text)
-    if likely_shift > 0:
-        state.add_insight(
-            f"Text appears to be a Caesar cipher with shift {likely_shift}",
-            analyzer="text_analyzer"
-        )
-        decoded = apply_caesar_shift(text, likely_shift)
-        state.add_transformation(
-            name="caesar_decode",
-            description=f"Decoded Caesar cipher with shift {likely_shift}",
-            input_data=text,
-            output_data=decoded,
-            analyzer="text_analyzer"
-        )
-        state.puzzle_text = decoded
-    
-    # Check for Atbash cipher
-    if is_likely_atbash(text):
-        state.add_insight("Text may be encoded with Atbash cipher", analyzer="text_analyzer")
-        decoded = apply_atbash(text)
-        state.add_transformation(
-            name="atbash_decode",
-            description="Decoded Atbash cipher",
-            input_data=text,
-            output_data=decoded,
-            analyzer="text_analyzer"
-        )
-        state.puzzle_text = decoded
-    
-    # Check for Vigenère cipher markers
-    if has_vigenere_characteristics(text):
-        state.add_insight(
-            "Text has characteristics of a Vigenère cipher",
-            analyzer="text_analyzer"
-        )
-        # Attempt to determine the key length
-        possible_key_lengths = find_vigenere_key_length(text)
-        if possible_key_lengths:
-            state.add_insight(
-                f"Possible Vigenère key lengths: {', '.join(map(str, possible_key_lengths[:3]))}",
-                analyzer="text_analyzer",
-                data={"key_lengths": possible_key_lengths}
-            )
-    
-    return state
-
-
-@register_analyzer("extract_patterns")
-@analyzer_compatibility(requires_text=True)
-def extract_patterns(state: State) -> State:
-    """
-    Extract patterns and potential clues from the text.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_text:
-        return state
-    
-    text = state.puzzle_text.strip()
-    
-    # Look for common cryptographic puzzle patterns
-    
-    # Check for CTF flag formats
-    flag_patterns = [
-        r"flag{[^}]*}",
-        r"FLAG{[^}]*}",
-        r"ctf{[^}]*}",
-        r"CTF{[^}]*}",
-    ]
-    
-    for pattern in flag_patterns:
-        matches = re.findall(pattern, text)
-        if matches:
-            state.add_insight(
-                f"Found potential flag: {matches[0]}",
-                analyzer="text_analyzer",
-                data={"flags": matches}
-            )
-    
-    # Look for potential keywords
-    crypto_keywords = [
-        "secret", "password", "key", "decrypt", "encrypt", "cipher",
-        "hash", "hidden", "code", "puzzle", "solve", "crypto"
-    ]
-    
-    for keyword in crypto_keywords:
-        if keyword.lower() in text.lower():
-            # Find the context around the keyword
-            index = text.lower().find(keyword.lower())
-            start = max(0, index - 20)
-            end = min(len(text), index + len(keyword) + 20)
-            context = text[start:end]
-            
-            state.add_insight(
-                f"Found crypto keyword '{keyword}' in context: '{context}'",
-                analyzer="text_analyzer"
-            )
-    
-    # Check for patterns of numbers that might be ASCII codes
-    ascii_pattern = r"\b(?:1[01]\d|12[0-7]|[1-9]\d|[1-9])\b"
-    number_matches = re.findall(ascii_pattern, text)
-    
-    if len(number_matches) > 3:
-        try:
-            # Try to convert numbers to ASCII
-            ascii_text = ''.join([chr(int(num)) for num in number_matches])
-            if is_english_like(ascii_text):
+        for filename, file_info in state.related_files.items():
+            if file_info.get("text_content"):
+                related_text = file_info["text_content"]
                 state.add_insight(
-                    f"Numbers might represent ASCII codes: '{ascii_text}'",
+                    f"Analyzing related file {filename} ({len(related_text)} characters)",
                     analyzer="text_analyzer"
                 )
+                
+                # Add a transformation to show the related file content
                 state.add_transformation(
-                    name="ascii_code_decode",
-                    description="Converted numbers to ASCII characters",
-                    input_data=' '.join(number_matches),
-                    output_data=ascii_text,
+                    name=f"Related file: {filename}",
+                    description=f"Content of related file {filename}",
+                    input_data="Related file content",
+                    output_data=related_text[:1000] + "..." if len(related_text) > 1000 else related_text,
                     analyzer="text_analyzer"
                 )
-        except:
-            pass
-    
-    # Look for encoded URLs
-    url_pattern = r"https?://[^\s]+"
-    urls = re.findall(url_pattern, text)
-    
-    if urls:
-        state.add_insight(
-            f"Found URLs in the text: {', '.join(urls[:3])}",
-            analyzer="text_analyzer",
-            data={"urls": urls}
-        )
     
     return state
 
-
-# Helper functions
-
-def is_base64(text: str) -> bool:
-    """Check if a string is Base64 encoded."""
-    # Base64 uses only alphanumeric characters, +, /, and = for padding
-    if not re.match(r'^[A-Za-z0-9+/]+={0,2}$', text.strip()):
-        return False
+def analyze_character_distribution(state: State, text: str) -> None:
+    """
+    Analyze character distribution in the text.
     
-    # Base64 length must be a multiple of 4
-    if len(text.strip()) % 4 != 0:
-        return False
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # Count character frequencies
+    char_counts = collections.Counter(text)
+    total_chars = len(text)
     
-    # Try to decode it
-    try:
-        base64.b64decode(text)
-        return True
-    except Exception:
-        return False
-
-
-def is_hex(text: str) -> bool:
-    """Check if a string is hex encoded."""
-    # Hex strings contain only hex characters
-    if not re.match(r'^[A-Fa-f0-9]+$', text.strip()):
-        return False
+    # Calculate entropy
+    import math
+    entropy = 0
+    for char, count in char_counts.items():
+        prob = count / total_chars
+        entropy -= prob * math.log2(prob)
     
-    # Hex strings should have an even length
-    if len(text.strip()) % 2 != 0:
-        return False
+    # Determine most common and least common characters
+    most_common = char_counts.most_common(5)
+    least_common = char_counts.most_common()[:-6:-1]
     
-    # Try to decode it
-    try:
-        bytes.fromhex(text.strip())
-        return True
-    except Exception:
-        return False
-
-
-def is_ascii85(text: str) -> bool:
-    """Check if a string is likely ASCII85/Base85 encoded."""
-    # ASCII85 uses a limited character set
-    if not re.match(r'^[!-uz]+~?>$', text.strip()):
-        return False
+    # Add insights
+    state.add_insight(
+        f"Character entropy: {entropy:.2f} bits (higher values indicate more randomness)",
+        analyzer="text_analyzer"
+    )
     
-    # Try to decode it
-    try:
-        base64.a85decode(text)
-        return True
-    except Exception:
-        return False
-
-
-def is_url_encoded(text: str) -> bool:
-    """Check if a string is URL encoded."""
-    # URL encoded strings often contain % followed by two hex digits
-    if not re.search(r'%[0-9A-Fa-f]{2}', text):
-        return False
+    state.add_insight(
+        f"Most common characters: {', '.join([repr(c) + ':' + str(n) for c, n in most_common])}",
+        analyzer="text_analyzer"
+    )
     
-    # Try to decode it
-    try:
-        import urllib.parse
-        decoded = urllib.parse.unquote(text)
-        # If decoded is different, it was URL encoded
-        return decoded != text
-    except Exception:
-        return False
+    state.add_insight(
+        f"Least common characters: {', '.join([repr(c) + ':' + str(n) for c, n in least_common])}",
+        analyzer="text_analyzer"
+    )
+    
+    # Check character set
+    ascii_printable = all(c in string.printable for c in text)
+    ascii_letters_only = all(c in string.ascii_letters + string.whitespace for c in text)
+    hex_only = all(c in string.hexdigits + string.whitespace for c in text)
+    digits_only = all(c in string.digits + string.whitespace for c in text)
+    base64_chars = set(string.ascii_letters + string.digits + '+/=' + string.whitespace)
+    base64_only = all(c in base64_chars for c in text)
+    
+    if ascii_printable:
+        state.add_insight(
+            "Text contains only printable ASCII characters",
+            analyzer="text_analyzer"
+        )
+    
+    if ascii_letters_only:
+        state.add_insight(
+            "Text contains only letters and whitespace (potential cipher text)",
+            analyzer="text_analyzer"
+        )
+    
+    if hex_only:
+        state.add_insight(
+            "Text contains only hexadecimal characters (potential hex encoding)",
+            analyzer="text_analyzer"
+        )
+    
+    if digits_only:
+        state.add_insight(
+            "Text contains only digits (potential numeric encoding)",
+            analyzer="text_analyzer"
+        )
+    
+    if base64_only:
+        state.add_insight(
+            "Text contains only Base64 characters (potential Base64 encoding)",
+            analyzer="text_analyzer"
+        )
+    
+    # Add transformation for character frequency
+    freq_output = "Character Frequencies:\n"
+    for char, count in char_counts.most_common(20):
+        freq_output += f"{repr(char)}: {count} ({count/total_chars*100:.2f}%)\n"
+    
+    state.add_transformation(
+        name="Character Frequency Analysis",
+        description="Analysis of character frequencies in the text",
+        input_data=text[:100] + "..." if len(text) > 100 else text,
+        output_data=freq_output,
+        analyzer="text_analyzer"
+    )
 
+def analyze_word_patterns(state: State, text: str) -> None:
+    """
+    Analyze word patterns in the text.
+    
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # Split into words (handling various separators)
+    words = re.findall(r'\b\w+\b', text)
+    
+    if not words:
+        state.add_insight(
+            "No clear word patterns found in the text",
+            analyzer="text_analyzer"
+        )
+        return
+    
+    # Count word frequencies
+    word_counts = collections.Counter(words)
+    
+    # Determine most common words
+    most_common_words = word_counts.most_common(5)
+    
+    # Add insights
+    state.add_insight(
+        f"Total words: {len(words)}, unique words: {len(word_counts)}",
+        analyzer="text_analyzer"
+    )
+    
+    if most_common_words:
+        state.add_insight(
+            f"Most common words: {', '.join([f'{w}:{c}' for w, c in most_common_words])}",
+            analyzer="text_analyzer"
+        )
+    
+    # Look for repeating word patterns
+    repeated_patterns = []
+    for n in range(2, min(5, len(words) // 2 + 1)):
+        for i in range(len(words) - n + 1):
+            pattern = tuple(words[i:i+n])
+            count = 0
+            for j in range(len(words) - n + 1):
+                if tuple(words[j:j+n]) == pattern:
+                    count += 1
+            if count > 1:
+                repeated_patterns.append((pattern, count))
+    
+    # Sort and remove duplicates
+    repeated_patterns = sorted(set(repeated_patterns), key=lambda x: x[1], reverse=True)
+    
+    if repeated_patterns:
+        patterns_text = ", ".join([f"{' '.join(p)}:{c}" for p, c in repeated_patterns[:3]])
+        state.add_insight(
+            f"Repeated word patterns: {patterns_text}",
+            analyzer="text_analyzer"
+        )
+    
+    # Check for potential letter substitution ciphers
+    if len(words) >= 20:
+        # English letter frequency: E, T, A, O, I, N, S, H, R, D, L, U, C...
+        english_letter_freq = "ETAOINSRHLDCUMFPGWYBVKJXQZ".lower()
+        
+        # Calculate letter frequency in the text
+        letter_counts = collections.Counter("".join(words).lower())
+        text_letter_freq = "".join([c for c, _ in letter_counts.most_common()
+                                    if c in string.ascii_lowercase])
+        
+        # Check if the frequency pattern matches English
+        if len(text_letter_freq) >= 10:
+            matches = 0
+            for i in range(5):
+                if i < len(text_letter_freq) and text_letter_freq[i] in english_letter_freq[:10]:
+                    matches += 1
+            
+            if matches >= 3:
+                state.add_insight(
+                    "Letter frequency distribution is similar to English text",
+                    analyzer="text_analyzer"
+                )
+            else:
+                state.add_insight(
+                    "Letter frequency distribution differs from standard English (potential substitution cipher)",
+                    analyzer="text_analyzer"
+                )
 
-def is_binary(text: str) -> bool:
-    """Check if a string is binary encoded."""
-    # Binary strings contain only 0s and 1s, possibly with spaces
-    return bool(re.match(r'^[01\s]+$', text.strip()))
-
-
-def apply_rot13(text: str) -> str:
-    """Apply ROT13 transformation to a string."""
-    result = ""
-    for char in text:
-        if char.isalpha():
-            ascii_offset = ord('a') if char.islower() else ord('A')
-            rotated = (ord(char) - ascii_offset + 13) % 26 + ascii_offset
-            result += chr(rotated)
-        else:
-            result += char
-    return result
-
-
-def is_english_like(text: str) -> bool:
-    """Check if a string appears to be English text."""
-    # Calculate the percentage of common English letters
-    common_letters = 'etaoinshrdlucmfwypvbgkjqxz'
-    letter_count = sum(1 for c in text.lower() if c in common_letters)
-    total_letters = sum(1 for c in text if c.isalpha())
+def analyze_potential_encodings(state: State, text: str) -> None:
+    """
+    Analyze if the text matches patterns of common encodings.
     
-    if total_letters == 0:
-        return False
-    
-    # Check if there is a high ratio of common English letters
-    common_ratio = letter_count / total_letters
-    if common_ratio < 0.7:
-        return False
-    
-    # Check for common English words
-    common_words = [
-        'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i',
-        'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at'
-    ]
-    
-    word_count = sum(1 for word in text.lower().split() if word in common_words)
-    total_words = len(text.split())
-    
-    if total_words == 0:
-        return False
-    
-    # Check if there is a reasonable ratio of common English words
-    word_ratio = word_count / total_words
-    
-    return word_ratio > 0.1
-
-
-def detect_caesar_shift(text: str) -> int:
-    """Detect the most likely Caesar cipher shift."""
-    # Only consider alphabetic characters
-    alpha_text = ''.join(c.lower() for c in text if c.isalpha())
-    
-    if not alpha_text:
-        return 0
-    
-    # Score each possible shift based on letter frequency
-    english_freq = {
-        'e': 12.02, 't': 9.10, 'a': 8.12, 'o': 7.68, 'i': 7.31,
-        'n': 6.95, 's': 6.28, 'r': 6.02, 'h': 5.92, 'd': 4.32,
-        'l': 3.98, 'u': 2.88, 'c': 2.71, 'm': 2.61, 'f': 2.30,
-        'y': 2.11, 'w': 2.09, 'g': 2.03, 'p': 1.82, 'b': 1.49,
-        'v': 1.11, 'k': 0.69, 'x': 0.17, 'q': 0.11, 'j': 0.10, 'z': 0.07
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
+    """
+    # Patterns for common encodings
+    patterns = {
+        "hexadecimal": r'^[0-9a-fA-F\s]+$',
+        "base64": r'^[A-Za-z0-9+/=\s]+$',
+        "binary": r'^[01\s]+$',
+        "decimal": r'^[0-9\s]+$',
+        "morse_code": r'^[\.\-\s/]+$',
+        "url_encoding": r'%[0-9a-fA-F]{2}',
+        "html_entities": r'&[#a-zA-Z0-9]+;'
     }
     
-    best_score = 0
-    best_shift = 0
+    # Clean the text
+    clean_text = text.strip()
     
-    for shift in range(1, 26):
-        score = 0
-        shifted_text = apply_caesar_shift(alpha_text, shift)
-        freq = Counter(shifted_text)
-        total = len(shifted_text)
-        
-        # Calculate score based on English letter frequency
-        for char, count in freq.items():
-            if char in english_freq:
-                expected = english_freq[char] * total / 100
-                score += min(count, expected) / max(count, expected)
-        
-        if score > best_score:
-            best_score = score
-            best_shift = shift
+    # Check each pattern
+    for encoding, pattern in patterns.items():
+        if re.match(pattern, clean_text):
+            state.add_insight(
+                f"Text appears to be {encoding} encoded",
+                analyzer="text_analyzer"
+            )
+        elif encoding == "url_encoding" and re.search(pattern, clean_text):
+            state.add_insight(
+                f"Text contains URL-encoded characters",
+                analyzer="text_analyzer"
+            )
+        elif encoding == "html_entities" and re.search(pattern, clean_text):
+            state.add_insight(
+                f"Text contains HTML entities",
+                analyzer="text_analyzer"
+            )
     
-    # Only return if the score is significant
-    return best_shift if best_score > 10 else 0
-
-
-def apply_caesar_shift(text: str, shift: int) -> str:
-    """Apply a Caesar cipher shift to a string."""
-    result = ""
-    for char in text:
-        if char.isalpha():
-            ascii_offset = ord('a') if char.islower() else ord('A')
-            shifted = (ord(char) - ascii_offset + shift) % 26 + ascii_offset
-            result += chr(shifted)
-        else:
-            result += char
-    return result
-
-
-def is_likely_atbash(text: str) -> bool:
-    """Check if a string is likely encoded with Atbash cipher."""
-    # Atbash should have a similar frequency distribution as the original text
-    # but with different characters
-    alpha_text = ''.join(c.lower() for c in text if c.isalpha())
+    # Check for potential Base64
+    if re.match(patterns["base64"], clean_text):
+        # Base64-encoded data often has a length that's a multiple of 4
+        if len(clean_text.replace('\n', '').replace(' ', '')) % 4 == 0:
+            state.add_insight(
+                "Text length is a multiple of 4, consistent with Base64 encoding",
+                analyzer="text_analyzer"
+            )
     
-    if not alpha_text:
-        return False
-    
-    # Check if applying Atbash produces more English-like text
-    atbash_text = apply_atbash(alpha_text)
-    
-    return is_english_like(atbash_text) and not is_english_like(alpha_text)
+    # Check for hex with specific length patterns
+    if re.match(patterns["hexadecimal"], clean_text):
+        clean_hex = clean_text.replace('\n', '').replace(' ', '')
+        if len(clean_hex) % 2 == 0:
+            if len(clean_hex) == 32:
+                state.add_insight(
+                    "Text appears to be 16-byte hex data (e.g., MD5 hash)",
+                    analyzer="text_analyzer"
+                )
+            elif len(clean_hex) == 40:
+                state.add_insight(
+                    "Text appears to be 20-byte hex data (e.g., SHA-1 hash)",
+                    analyzer="text_analyzer"
+                )
+            elif len(clean_hex) == 64:
+                state.add_insight(
+                    "Text appears to be 32-byte hex data (e.g., SHA-256 hash)",
+                    analyzer="text_analyzer"
+                )
+            else:
+                state.add_insight(
+                    f"Text appears to be {len(clean_hex)//2}-byte hex data",
+                    analyzer="text_analyzer"
+                )
 
-
-def apply_atbash(text: str) -> str:
-    """Apply Atbash cipher transformation to a string."""
-    result = ""
-    for char in text:
-        if char.islower():
-            result += chr(219 - ord(char))  # 219 = ord('a') + ord('z')
-        elif char.isupper():
-            result += chr(155 - ord(char))  # 155 = ord('A') + ord('Z')
-        else:
-            result += char
-    return result
-
-
-def has_vigenere_characteristics(text: str) -> bool:
-    """Check if a string has characteristics of a Vigenère cipher."""
-    # Vigenère typically has more evenly distributed character frequencies
-    # than simple substitution ciphers
-    alpha_text = ''.join(c.lower() for c in text if c.isalpha())
-    
-    if len(alpha_text) < 30:
-        return False
-    
-    freq = Counter(alpha_text)
-    values = list(freq.values())
-    
-    if not values:
-        return False
-    
-    # Calculate standard deviation of frequencies
-    mean = sum(values) / len(values)
-    variance = sum((x - mean) ** 2 for x in values) / len(values)
-    std_dev = variance ** 0.5
-    
-    # Vigenère tends to have a lower standard deviation
-    return std_dev < mean / 2
-
-
-def find_vigenere_key_length(text: str) -> List[int]:
+def analyze_line_patterns(state: State, text: str) -> None:
     """
-    Find possible key lengths for a Vigenère cipher using the Index of Coincidence.
+    Analyze patterns across different lines in the text.
     
-    Returns a list of potential key lengths sorted by likelihood.
+    Args:
+        state: Current puzzle state
+        text: Text to analyze
     """
-    alpha_text = ''.join(c.lower() for c in text if c.isalpha())
+    lines = text.splitlines()
     
-    if len(alpha_text) < 30:
-        return []
+    if len(lines) <= 1:
+        return
     
-    # Calculate Index of Coincidence for different key lengths
-    ic_scores = []
-    for key_length in range(2, 21):  # Try key lengths 2-20
-        if len(alpha_text) < key_length * 2:
-            continue
-        
-        # Split text into groups based on key length
-        groups = [''] * key_length
-        for i, char in enumerate(alpha_text):
-            groups[i % key_length] += char
-        
-        # Calculate average IC for all groups
-        avg_ic = 0
-        for group in groups:
-            freq = Counter(group)
-            n = len(group)
-            if n <= 1:
-                continue
-                
-            # Calculate Index of Coincidence
-            ic = sum(count * (count - 1) for count in freq.values()) / (n * (n - 1))
-            avg_ic += ic
-        
-        avg_ic /= key_length
-        ic_scores.append((key_length, avg_ic))
+    # Add insight about number of lines
+    state.add_insight(
+        f"Text contains {len(lines)} lines",
+        analyzer="text_analyzer"
+    )
     
-    # English has an IC of ~0.067, so higher scores are more likely English
-    # Sort by IC score, descending
-    ic_scores.sort(key=lambda x: x[1], reverse=True)
+    # Check for equal-length lines
+    line_lengths = [len(line) for line in lines]
+    if len(set(line_lengths)) == 1 and line_lengths[0] > 0:
+        state.add_insight(
+            f"All lines have equal length ({line_lengths[0]} characters), possible grid or structured data",
+            analyzer="text_analyzer"
+        )
     
-    # Return the key lengths sorted by likelihood
-    return [length for length, _ in ic_scores if _ > 0.05]
+    # Check for lines starting with the same pattern
+    line_starts = [line[:min(5, len(line))] for line in lines if line]
+    start_counter = collections.Counter(line_starts)
+    common_starts = [s for s, count in start_counter.most_common() if count > 1]
+    
+    if common_starts:
+        state.add_insight(
+            f"Multiple lines start with the same pattern: {', '.join(repr(s) for s in common_starts[:3])}",
+            analyzer="text_analyzer"
+        )
+    
+    # Check for potential ASCII art
+    ascii_art_chars = set('-|/\\[]{}()#*+<>=_')
+    ascii_art_ratio = sum(1 for c in text if c in ascii_art_chars) / len(text) if text else 0
+    
+    if ascii_art_ratio > 0.15:
+        state.add_insight(
+            "Text contains a high ratio of ASCII art characters, may contain visual pattern",
+            analyzer="text_analyzer"
+        )

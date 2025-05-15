@@ -1,812 +1,592 @@
 """
-Binary analyzer module for Crypto Hunter
-
-This module provides functions for analyzing binary files,
-detecting file signatures, and extracting hidden data.
+Binary analyzer for Crypto Hunter.
+Analyzes binary data to identify file types, hidden data, and potential steganography.
 """
-import logging
+
+import os
 import re
+import string
 import binascii
 import struct
-import hashlib
-from typing import Dict, List, Any, Optional, Tuple, Union
-from io import BytesIO
-
+from collections import Counter
 from core.state import State
 from analyzers.base import register_analyzer, analyzer_compatibility
-import config
 
-logger = logging.getLogger(__name__)
+# File signatures for common file types
+FILE_SIGNATURES = {
+    b"\x89PNG\r\n\x1a\n": "PNG image",
+    b"\xff\xd8\xff": "JPEG image",
+    b"GIF87a": "GIF image (87a)",
+    b"GIF89a": "GIF image (89a)",
+    b"BM": "BMP image",
+    b"\x25\x50\x44\x46": "PDF document",
+    b"\x50\x4B\x03\x04": "ZIP archive",
+    b"\x52\x61\x72\x21\x1A\x07": "RAR archive",
+    b"\x1F\x8B\x08": "GZIP archive",
+    b"\x49\x44\x33": "MP3 audio (with ID3)",
+    b"\xFF\xFB": "MP3 audio",
+    b"\x4F\x67\x67\x53": "OGG audio/video",
+    b"\x00\x00\x00\x20\x66\x74\x79\x70": "MP4 video/audio",
+    b"\x4D\x5A": "Executable file",
+    b"\x7F\x45\x4C\x46": "ELF executable",
+    b"\xCA\xFE\xBA\xBE": "Java class file",
+    b"\x4D\x5A\x90\x00": "Windows executable",
+    b"PK": "ZIP-based file format",
+    b"\x1F\x8B": "GZIP compressed file",
+    b"\x25\x21\x50\x53": "PostScript document",
+    b"\x7B\x5C\x72\x74\x66": "RTF document",
+    b"\x50\x4B\x05\x06": "PKZIP archive",
+    b"\x75\x73\x74\x61\x72": "TAR archive",
+    b"\x00\x01\x00\x00\x00": "TrueType font",
+    b"\x52\x49\x46\x46": "RIFF container (AVI, WAV)",
+    b"\x4F\x54\x54\x4F": "OpenType font",
+    b"\x28\xB5\x2F\xFD": "Zstandard compressed data",
+    b"\x46\x4C\x56\x01": "Flash video",
+    b"\x00\x00\x01\xBA": "MPEG transport stream",
+    b"\x42\x5A\x68": "BZip2 compressed file",
+    b"\x44\x49\x43\x4D": "DICOM medical image",
+    b"\x1A\x45\xDF\xA3": "Matroska multimedia container",
+    b"\x78\x01": "ZLIB compressed data (low compression)",
+    b"\x78\x9C": "ZLIB compressed data (default compression)",
+    b"\x78\xDA": "ZLIB compressed data (best compression)",
+    b"\x4E\x45\x53\x1A": "Nintendo Entertainment System ROM",
+    b"\x42\x4F\x4F\x4B\x4D\x4F\x42\x49": "MOBI ebook",
+    b"\x51\x46\x49": "QEMU copy-on-write disk image"
+}
 
-
-@register_analyzer("binary_analyze")
+@register_analyzer("binary_analyzer")
 @analyzer_compatibility(requires_binary=True)
 def analyze_binary(state: State) -> State:
     """
-    Main binary analyzer function that orchestrates binary analysis.
-
+    Analyze binary data for file signatures, hidden data, and other patterns.
+    
     Args:
         state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_data:
-        state.add_insight("No binary data available for analysis", analyzer="binary_analyzer")
-        return state
-    
-    # Run various binary analysis functions
-    state = detect_file_type(state)
-    state = analyze_entropy(state)
-    state = search_for_signatures(state)
-    state = extract_strings(state)
-    state = check_for_embedded_files(state)
-    
-    return state
-
-
-@register_analyzer("detect_file_type")
-@analyzer_compatibility(requires_binary=True)
-def detect_file_type(state: State) -> State:
-    """
-    Detect the file type based on magic bytes or signatures.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_data:
-        return state
-    
-    data = state.puzzle_data[:32]  # Get first 32 bytes for signature detection
-    
-    # Convert start of data to hex for comparison
-    hex_signature = binascii.hexlify(data).decode('utf-8').upper()
-    
-    # Check against known file signatures
-    for file_type, signature_info in config.FILE_SIGNATURES.items():
-        hex_sig = signature_info["hex_signature"]
-        offset = signature_info["offset"]
         
-        if hex_signature[offset*2:].startswith(hex_sig):
-            file_description = signature_info["description"]
+    Returns:
+        Updated state
+    """
+    if not state.binary_data:
+        return state
+    
+    data = state.binary_data
+    
+    # Add insight about starting analysis
+    state.add_insight(
+        f"Starting binary analysis of {len(data)} bytes",
+        analyzer="binary_analyzer"
+    )
+    
+    # Identify file type
+    identify_file_type(state, data)
+    
+    # Check for embedded files
+    check_for_embedded_files(state, data)
+    
+    # Analyze entropy
+    analyze_entropy(state, data)
+    
+    # Check for hidden text
+    check_for_hidden_text(state, data)
+    
+    # Look for unusual patterns
+    check_for_unusual_patterns(state, data)
+    
+    # Check related files if any
+    if state.related_files:
+        state.add_insight(
+            f"Checking {len(state.related_files)} related files for binary patterns",
+            analyzer="binary_analyzer"
+        )
+        
+        for filename, file_info in state.related_files.items():
+            binary_content = file_info["content"]
             state.add_insight(
-                f"Detected file type: {file_type} ({file_description})",
+                f"Analyzing related binary file {filename} ({len(binary_content)} bytes)",
                 analyzer="binary_analyzer"
             )
             
-            # Update file type if not already set
-            if not state.file_type or state.file_type == "bin":
-                state.file_type = file_type.lower()
-                
-            return state
-    
-    # If not identified, look for other patterns
-    # Check for PE file
-    if data[0:2] == b'MZ':
-        state.add_insight(
-            "File appears to be a Windows executable (PE)",
-            analyzer="binary_analyzer"
-        )
-        if not state.file_type or state.file_type == "bin":
-            state.file_type = "exe"
-    
-    # Check for ELF file
-    elif data[0:4] == b'\x7FELF':
-        state.add_insight(
-            "File appears to be an ELF executable",
-            analyzer="binary_analyzer"
-        )
-        if not state.file_type or state.file_type == "bin":
-            state.file_type = "elf"
-    
-    # Check for ZIP file
-    elif data[0:4] == b'PK\x03\x04':
-        state.add_insight(
-            "File appears to be a ZIP archive",
-            analyzer="binary_analyzer"
-        )
-        if not state.file_type or state.file_type == "bin":
-            state.file_type = "zip"
-    
-    # Check for PDF file
-    elif data[0:5] == b'%PDF-':
-        state.add_insight(
-            "File appears to be a PDF document",
-            analyzer="binary_analyzer"
-        )
-        if not state.file_type or state.file_type == "bin":
-            state.file_type = "pdf"
-    
-    # If still not identified
-    if not state.file_type or state.file_type == "bin":
-        state.add_insight(
-            "Could not identify file type from signatures",
-            analyzer="binary_analyzer"
-        )
+            # Identify file type of the related file
+            file_type = identify_file_type_from_data(binary_content)
+            if file_type:
+                state.add_insight(
+                    f"Related file {filename} appears to be a {file_type}",
+                    analyzer="binary_analyzer"
+                )
     
     return state
 
-
-@register_analyzer("analyze_entropy")
-@analyzer_compatibility(requires_binary=True)
-def analyze_entropy(state: State) -> State:
+def identify_file_type(state: State, data: bytes) -> None:
     """
-    Analyze the entropy of the binary data to detect encryption, compression, or hidden data.
-
+    Identify the file type based on signatures.
+    
     Args:
         state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
+        data: Binary data to analyze
     """
-    if not state.puzzle_data:
-        return state
+    file_type = identify_file_type_from_data(data)
     
-    data = state.puzzle_data
-    
-    # Calculate entropy
-    entropy = calculate_entropy(data)
-    
-    # Interpret entropy value
-    if entropy > 7.5:
+    if file_type:
         state.add_insight(
-            f"Very high entropy ({entropy:.2f}): Data is likely encrypted or compressed",
-            analyzer="binary_analyzer",
-            data={"entropy": entropy}
-        )
-    elif entropy > 6.5:
-        state.add_insight(
-            f"High entropy ({entropy:.2f}): Data may be compressed or contain encrypted sections",
-            analyzer="binary_analyzer",
-            data={"entropy": entropy}
-        )
-    elif entropy > 5.0:
-        state.add_insight(
-            f"Medium entropy ({entropy:.2f}): Data appears to be a mix of structured and random content",
-            analyzer="binary_analyzer",
-            data={"entropy": entropy}
+            f"File appears to be a {file_type}",
+            analyzer="binary_analyzer"
         )
     else:
         state.add_insight(
-            f"Low entropy ({entropy:.2f}): Data is likely structured or plain text",
-            analyzer="binary_analyzer",
-            data={"entropy": entropy}
+            "No recognized file signature detected",
+            analyzer="binary_analyzer"
         )
-    
-    # Perform sliding window entropy analysis to find hidden data
-    if len(data) > 1000:
-        anomalies = find_entropy_anomalies(data)
-        if anomalies:
+        
+        # Check if it could be text
+        printable_ratio = sum(1 for b in data if chr(b).isprintable()) / len(data) if data else 0
+        if printable_ratio > 0.8:
             state.add_insight(
-                f"Detected {len(anomalies)} entropy anomalies that may indicate hidden data",
-                analyzer="binary_analyzer",
-                data={"anomalies": anomalies}
+                "Binary data has high ratio of printable characters, may contain text",
+                analyzer="binary_analyzer"
             )
             
-            # Extract first anomaly if significant
-            if anomalies and anomalies[0]["score"] > 2.0:
-                start, end, _ = anomalies[0]["range"]
-                anomaly_data = data[start:end]
-                
+            # Add transformation to show the text
+            try:
+                text = data.decode('utf-8', errors='replace')
                 state.add_transformation(
-                    name="extract_anomaly",
-                    description=f"Extracted entropy anomaly at offset {start}-{end}",
-                    input_data=data,
-                    output_data=anomaly_data,
+                    name="Binary as Text",
+                    description="Binary data interpreted as UTF-8 text",
+                    input_data=data[:100].hex(),
+                    output_data=text[:1000] + "..." if len(text) > 1000 else text,
                     analyzer="binary_analyzer"
                 )
-    
-    return state
+            except Exception as e:
+                state.add_insight(
+                    f"Error decoding binary as text: {e}",
+                    analyzer="binary_analyzer"
+                )
 
-
-@register_analyzer("search_for_signatures")
-@analyzer_compatibility(requires_binary=True)
-def search_for_signatures(state: State) -> State:
+def identify_file_type_from_data(data: bytes) -> str:
     """
-    Search for known signatures and patterns in the binary data.
+    Identify file type from binary data.
+    
+    Args:
+        data: Binary data to analyze
+        
+    Returns:
+        String describing the identified file type, or None if not identified
+    """
+    for signature, file_type in FILE_SIGNATURES.items():
+        if data.startswith(signature):
+            return file_type
+    return None
 
+def check_for_embedded_files(state: State, data: bytes) -> None:
+    """
+    Check for embedded files within the binary data.
+    
     Args:
         state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
+        data: Binary data to analyze
     """
-    if not state.puzzle_data:
-        return state
-    
-    data = state.puzzle_data
-    
-    # Search for common crypto-related patterns
-    patterns = {
-        "bitcoin_address": rb"(?:[13][a-km-zA-HJ-NP-Z1-9]{25,34})",
-        "ethereum_address": rb"0x[a-fA-F0-9]{40}",
-        "private_key_hex": rb"[0-9a-fA-F]{64}",
-        "base64_data": rb"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?",
-    }
-    
-    for name, pattern in patterns.items():
-        matches = re.findall(pattern, data)
-        if matches:
-            # Limit to first 5 matches
-            unique_matches = set(matches[:5])
-            match_str = ", ".join([m.decode('utf-8', errors='replace') for m in unique_matches])
-            state.add_insight(
-                f"Found {name} pattern: {match_str}",
-                analyzer="binary_analyzer",
-                data={"matches": [m.decode('utf-8', errors='replace') for m in matches]}
-            )
-    
-    # Look for hidden file signatures within the file
-    offset = 0
+    # Scan for file signatures within the data (not just at the beginning)
     embedded_files = []
     
-    while offset < len(data) - 4:
-        # Check for common file signatures
-        for file_type, signature_info in config.FILE_SIGNATURES.items():
-            hex_sig = signature_info["hex_signature"]
-            sig_bytes = bytes.fromhex(hex_sig)
-            
-            if data[offset:offset+len(sig_bytes)] == sig_bytes:
-                embedded_files.append({
-                    "type": file_type,
-                    "offset": offset,
-                    "description": signature_info["description"],
-                })
-                
-                # Skip ahead to avoid duplicate matches
-                offset += len(sig_bytes)
-                break
+    for signature, file_type in FILE_SIGNATURES.items():
+        positions = []
+        start_pos = 0
         
-        offset += 1
+        while True:
+            pos = data.find(signature, start_pos)
+            if pos == -1:
+                break
+            positions.append(pos)
+            start_pos = pos + 1
+        
+        if positions:
+            embedded_files.append((file_type, positions))
     
-    # Add insights for embedded files
     if embedded_files:
-        for embedded in embedded_files:
+        # Filter out the signature at the beginning
+        embedded_files = [(ftype, pos) for ftype, positions in embedded_files 
+                         for pos in positions if pos > 0]
+        
+        if embedded_files:
             state.add_insight(
-                f"Detected embedded {embedded['description']} at offset {embedded['offset']}",
-                analyzer="binary_analyzer",
-                data=embedded
+                f"Found {len(embedded_files)} potential embedded files or signatures",
+                analyzer="binary_analyzer"
             )
             
-            # Extract the first embedded file
-            if embedded == embedded_files[0]:
-                # Attempt to extract the file
-                start_offset = embedded["offset"]
-                end_offset = find_file_end(data, start_offset, embedded["type"])
-                
-                if end_offset > start_offset:
-                    embedded_data = data[start_offset:end_offset]
-                    state.add_transformation(
-                        name="extract_embedded_file",
-                        description=f"Extracted embedded {embedded['description']}",
-                        input_data=data,
-                        output_data=embedded_data,
-                        analyzer="binary_analyzer"
-                    )
-                    
-                    # Create a new state for the embedded file
-                    embedded_state = State(
-                        puzzle_data=embedded_data,
-                        metadata={
-                            "source": "embedded",
-                            "parent_file": state.puzzle_file,
-                            "offset": start_offset,
-                        }
-                    )
-                    
-                    # Add as a transformation
-                    state.add_transformation(
-                        name="create_embedded_state",
-                        description="Created new state for embedded file",
-                        input_data=data,
-                        output_data=str(embedded_state.hash),
-                        analyzer="binary_analyzer"
-                    )
-    
-    return state
-
-
-@register_analyzer("extract_strings")
-@analyzer_compatibility(requires_binary=True)
-def extract_strings(state: State) -> State:
-    """
-    Extract readable strings from binary data.
-
-    Args:
-        state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
-    """
-    if not state.puzzle_data:
-        return state
-    
-    data = state.puzzle_data
-    
-    # Extract ASCII strings
-    ascii_strings = extract_ascii_strings(data, min_length=4)
-    
-    # Extract UTF-16 strings (common in Windows binaries)
-    utf16_strings = extract_utf16_strings(data, min_length=4)
-    
-    # Combine and filter strings
-    all_strings = ascii_strings + utf16_strings
-    
-    # Filter out common noise and duplicates
-    filtered_strings = filter_strings(all_strings)
-    
-    if filtered_strings:
-        # Limit to top 20 most interesting strings
-        top_strings = filtered_strings[:20]
-        
-        # Join strings for display
-        strings_text = "\n".join(top_strings)
-        
-        state.add_insight(
-            f"Extracted {len(filtered_strings)} strings from binary data",
-            analyzer="binary_analyzer",
-            data={"string_count": len(filtered_strings)}
-        )
-        
-        # Add transformation with extracted strings
-        state.add_transformation(
-            name="extract_strings",
-            description="Extracted readable strings from binary data",
-            input_data=data,
-            output_data=strings_text,
-            analyzer="binary_analyzer"
-        )
-        
-        # Look for potential flags or secrets in strings
-        for string in filtered_strings:
-            lower_string = string.lower()
-            if "flag" in lower_string or "key" in lower_string or "secret" in lower_string:
+            for file_type, position in embedded_files[:5]:  # Limit to first 5
                 state.add_insight(
-                    f"Potential secret found: {string}",
+                    f"Potential {file_type} at offset {position} (0x{position:X})",
                     analyzer="binary_analyzer"
                 )
-    
-    return state
 
-
-@register_analyzer("check_for_embedded_files")
-@analyzer_compatibility(requires_binary=True)
-def check_for_embedded_files(state: State) -> State:
+def analyze_entropy(state: State, data: bytes) -> None:
     """
-    Check for embedded files using more advanced techniques.
-
+    Analyze the entropy of the binary data.
+    
     Args:
         state: Current puzzle state
-
-    Returns:
-        Updated state after analysis
+        data: Binary data to analyze
     """
-    if not state.puzzle_data:
-        return state
+    import math
     
-    data = state.puzzle_data
+    # Count byte frequencies
+    byte_counts = Counter(data)
+    total_bytes = len(data)
     
-    # Check for specific file formats
+    # Calculate Shannon entropy
+    entropy = 0
+    for byte_val, count in byte_counts.items():
+        prob = count / total_bytes
+        entropy -= prob * math.log2(prob)
     
-    # Check for ZIP data
-    if b'PK\x03\x04' in data:
+    # Interpret entropy level
+    max_entropy = 8  # Maximum entropy for a byte (8 bits)
+    entropy_ratio = entropy / max_entropy
+    
+    state.add_insight(
+        f"Binary entropy: {entropy:.2f} bits ({entropy_ratio:.1%} of maximum)",
+        analyzer="binary_analyzer"
+    )
+    
+    if entropy_ratio > 0.9:
         state.add_insight(
-            "Detected potential ZIP data",
+            "Very high entropy suggests encryption, compression, or random data",
             analyzer="binary_analyzer"
         )
-        # Try to extract it
-        try:
-            import zipfile
-            from io import BytesIO
+    elif entropy_ratio > 0.7:
+        state.add_insight(
+            "High entropy is typical of compressed, encrypted, or multimedia files",
+            analyzer="binary_analyzer"
+        )
+    elif entropy_ratio < 0.5:
+        state.add_insight(
+            "Low entropy suggests repetitive patterns or sparse data",
+            analyzer="binary_analyzer"
+        )
+    
+    # Analyze entropy distribution across the file
+    if len(data) > 1000:
+        # Analyze entropy in 1KB chunks
+        chunk_size = 1024
+        chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
+        
+        chunk_entropies = []
+        for i, chunk in enumerate(chunks):
+            # Skip empty chunks
+            if not chunk:
+                continue
             
-            # Find all PK signatures
-            zip_starts = [m.start() for m in re.finditer(b'PK\x03\x04', data)]
+            # Calculate entropy for this chunk
+            chunk_byte_counts = Counter(chunk)
+            chunk_entropy = 0
+            for byte_val, count in chunk_byte_counts.items():
+                prob = count / len(chunk)
+                chunk_entropy -= prob * math.log2(prob)
             
-            for start in zip_starts:
+            chunk_entropies.append((i, chunk_entropy))
+        
+        # Look for unusual entropy changes
+        significant_changes = []
+        for i in range(1, len(chunk_entropies)):
+            prev_entropy = chunk_entropies[i-1][1]
+            curr_entropy = chunk_entropies[i][1]
+            change = abs(curr_entropy - prev_entropy)
+            
+            if change > 2.0:  # Significant entropy change
+                significant_changes.append((chunk_entropies[i][0], change))
+        
+        if significant_changes:
+            first_change = significant_changes[0]
+            state.add_insight(
+                f"Significant entropy change at offset {first_change[0] * chunk_size} (0x{first_change[0] * chunk_size:X})",
+                analyzer="binary_analyzer"
+            )
+            
+            # Add transformation to show entropy distribution
+            output = "Chunk Offset, Entropy\n"
+            for chunk_idx, entropy in chunk_entropies:
+                output += f"{chunk_idx * chunk_size} (0x{chunk_idx * chunk_size:X}), {entropy:.2f}\n"
+            
+            state.add_transformation(
+                name="Entropy Distribution",
+                description="Distribution of entropy across the file in 1KB chunks",
+                input_data=f"Binary data ({len(data)} bytes)",
+                output_data=output[:1000] + "..." if len(output) > 1000 else output,
+                analyzer="binary_analyzer"
+            )
+
+def check_for_hidden_text(state: State, data: bytes) -> None:
+    """
+    Check for hidden text within the binary data.
+    
+    Args:
+        state: Current puzzle state
+        data: Binary data to analyze
+    """
+    # Look for ASCII strings
+    ascii_strings = find_strings(data, min_length=4)
+    
+    if ascii_strings:
+        state.add_insight(
+            f"Found {len(ascii_strings)} ASCII strings in the binary data",
+            analyzer="binary_analyzer"
+        )
+        
+        # Add the first few strings as insights
+        for string, offset in ascii_strings[:5]:
+            if any(c.isalnum() for c in string):  # Only show strings with alphanumeric chars
+                state.add_insight(
+                    f"ASCII string at offset {offset} (0x{offset:X}): {string}",
+                    analyzer="binary_analyzer"
+                )
+        
+        # Add a transformation with all strings
+        output = "Offset, String\n"
+        for string, offset in ascii_strings:
+            output += f"{offset} (0x{offset:X}), {string}\n"
+        
+        state.add_transformation(
+            name="ASCII Strings",
+            description="ASCII strings extracted from binary data",
+            input_data=f"Binary data ({len(data)} bytes)",
+            output_data=output[:1000] + "..." if len(output) > 1000 else output,
+            analyzer="binary_analyzer"
+        )
+    
+    # Look for Unicode strings (UTF-16)
+    try:
+        # Check for UTF-16 BOM
+        if (len(data) >= 2 and data[:2] in (b'\xff\xfe', b'\xfe\xff')) or \
+           (b'\x00' in data and b'\x00\x00\x00' not in data):
+            
+            # Try different UTF-16 variants
+            for encoding in ('utf-16', 'utf-16-le', 'utf-16-be'):
                 try:
-                    # Try to open as ZIP
-                    zip_data = data[start:]
-                    zip_file = zipfile.ZipFile(BytesIO(zip_data))
-                    
-                    # List files in ZIP
-                    file_list = zip_file.namelist()
-                    
-                    if file_list:
+                    text = data.decode(encoding, errors='ignore')
+                    # Filter out strings with too many control characters
+                    printable_ratio = sum(1 for c in text if c.isprintable()) / len(text) if text else 0
+                    if printable_ratio > 0.7:
                         state.add_insight(
-                            f"Successfully detected ZIP archive at offset {start} containing {len(file_list)} files",
-                            analyzer="binary_analyzer",
-                            data={"files": file_list}
-                        )
-                        
-                        # Extract first file as example
-                        first_file = file_list[0]
-                        extracted = zip_file.read(first_file)
-                        
-                        state.add_transformation(
-                            name="extract_zip_file",
-                            description=f"Extracted '{first_file}' from embedded ZIP",
-                            input_data=zip_data,
-                            output_data=extracted,
+                            f"Data may contain text encoded in {encoding.upper()}",
                             analyzer="binary_analyzer"
                         )
                         
-                        # Stop after first successful ZIP extraction
+                        # Add transformation for the UTF-16 text
+                        state.add_transformation(
+                            name=f"{encoding.upper()} Text",
+                            description=f"Binary data interpreted as {encoding.upper()} text",
+                            input_data=data[:100].hex(),
+                            output_data=text[:1000] + "..." if len(text) > 1000 else text,
+                            analyzer="binary_analyzer"
+                        )
                         break
-                
-                except Exception as e:
-                    logger.debug(f"Failed to extract ZIP at offset {start}: {e}")
+                except:
+                    continue
+    except Exception as e:
+        # Ignore errors in UTF-16 detection
+        pass
+
+def check_for_unusual_patterns(state: State, data: bytes) -> None:
+    """
+    Check for unusual patterns in the binary data.
+    
+    Args:
+        state: Current puzzle state
+        data: Binary data to analyze
+    """
+    # Check for repeating patterns
+    repeating = find_repeating_patterns(data)
+    if repeating:
+        state.add_insight(
+            f"Found repeating pattern of length {len(repeating)} bytes",
+            analyzer="binary_analyzer"
+        )
         
-        except ImportError:
-            state.add_insight(
-                "ZIP data detected but zipfile module not available",
+        # Add transformation to show the pattern
+        state.add_transformation(
+            name="Repeating Pattern",
+            description="Repeating byte pattern found in the data",
+            input_data=f"Binary data ({len(data)} bytes)",
+            output_data=repeating.hex(),
+            analyzer="binary_analyzer"
+        )
+    
+    # Check for XOR obfuscation
+    xor_key = detect_xor(data)
+    if xor_key is not None:
+        state.add_insight(
+            f"Data may be XOR encoded with byte 0x{xor_key:02X}",
+            analyzer="binary_analyzer"
+        )
+        
+        # Add transformation to show the first bytes of the XORed data
+        xored_data = bytes([b ^ xor_key for b in data[:100]])
+        
+        # Try to decode as text
+        try:
+            xored_text = xored_data.decode('utf-8', errors='replace')
+            state.add_transformation(
+                name="XOR Decoded",
+                description=f"First 100 bytes XORed with 0x{xor_key:02X}",
+                input_data=data[:100].hex(),
+                output_data=f"Hex: {xored_data.hex()}\nText: {xored_text}",
+                analyzer="binary_analyzer"
+            )
+        except:
+            state.add_transformation(
+                name="XOR Decoded",
+                description=f"First 100 bytes XORed with 0x{xor_key:02X}",
+                input_data=data[:100].hex(),
+                output_data=xored_data.hex(),
                 analyzer="binary_analyzer"
             )
     
-    # Check for hidden data using offset analysis
-    try:
-        # Look for sections of data that don't match the file type
-        mismatched_sections = find_mismatched_sections(data, state.file_type)
-        
-        if mismatched_sections:
-            for section in mismatched_sections:
-                state.add_insight(
-                    f"Detected potential hidden data at offset {section['offset']} (size: {section['size']} bytes)",
-                    analyzer="binary_analyzer"
-                )
-                
-                # Extract the first mismatched section
-                if section == mismatched_sections[0]:
-                    section_data = data[section['offset']:section['offset'] + section['size']]
-                    state.add_transformation(
-                        name="extract_hidden_section",
-                        description=f"Extracted potentially hidden data section",
-                        input_data=data,
-                        output_data=section_data,
-                        analyzer="binary_analyzer"
-                    )
-    
-    except Exception as e:
-        logger.debug(f"Error in mismatched section analysis: {e}")
-    
-    return state
+    # Check for bit shifting
+    bit_shift = detect_bit_shift(data)
+    if bit_shift is not None:
+        dir_str = "right" if bit_shift > 0 else "left"
+        abs_shift = abs(bit_shift)
+        state.add_insight(
+            f"Data may be bit-shifted {dir_str} by {abs_shift} bits",
+            analyzer="binary_analyzer"
+        )
 
-
-# Helper functions
-
-def calculate_entropy(data: bytes) -> float:
+def find_strings(data: bytes, min_length=4) -> list:
     """
-    Calculate the Shannon entropy of data.
+    Find ASCII strings in binary data.
     
     Args:
-        data: Binary data
+        data: Binary data to search
+        min_length: Minimum string length to consider
         
     Returns:
-        Entropy value (0-8)
+        List of tuples (string, offset)
     """
-    if not data:
-        return 0
+    result = []
+    current_string = ""
+    string_start = -1
     
-    # Count byte frequencies
-    byte_counts = {}
-    for byte in data:
-        byte_counts[byte] = byte_counts.get(byte, 0) + 1
-    
-    # Calculate entropy
-    entropy = 0
-    for count in byte_counts.values():
-        probability = count / len(data)
-        entropy -= probability * (math.log(probability) / math.log(2))
-    
-    return entropy
-
-
-def find_entropy_anomalies(data: bytes, window_size: int = 256, step: int = 64) -> List[Dict[str, Any]]:
-    """
-    Find entropy anomalies using sliding window analysis.
-    
-    Args:
-        data: Binary data
-        window_size: Size of each window
-        step: Step size for sliding window
-        
-    Returns:
-        List of anomalies with positions and scores
-    """
-    if len(data) < window_size * 2:
-        return []
-    
-    # Calculate entropy for each window
-    entropies = []
-    for i in range(0, len(data) - window_size, step):
-        window = data[i:i+window_size]
-        entropies.append((i, calculate_entropy(window)))
-    
-    # Calculate mean and standard deviation
-    mean_entropy = sum(e[1] for e in entropies) / len(entropies)
-    std_dev = (sum((e[1] - mean_entropy) ** 2 for e in entropies) / len(entropies)) ** 0.5
-    
-    # Find anomalies (windows with entropy more than 2 std devs from mean)
-    anomalies = []
-    for i, entropy in entropies:
-        z_score = abs(entropy - mean_entropy) / std_dev if std_dev > 0 else 0
-        if z_score > 2.0:
-            anomalies.append({
-                "range": (i, i + window_size, entropy),
-                "score": z_score,
-                "entropy": entropy
-            })
-    
-    # Merge overlapping anomalies
-    merged_anomalies = []
-    current = None
-    
-    for anomaly in sorted(anomalies, key=lambda x: x["range"][0]):
-        if current is None:
-            current = anomaly
-        elif anomaly["range"][0] <= current["range"][1]:
-            # Merge
-            current["range"] = (
-                current["range"][0],
-                max(current["range"][1], anomaly["range"][1]),
-                max(current["range"][2], anomaly["range"][2])
-            )
-            current["score"] = max(current["score"], anomaly["score"])
+    for i, byte in enumerate(data):
+        if 32 <= byte <= 126:  # ASCII printable character
+            if string_start == -1:
+                string_start = i
+            current_string += chr(byte)
         else:
-            merged_anomalies.append(current)
-            current = anomaly
+            if string_start != -1 and len(current_string) >= min_length:
+                result.append((current_string, string_start))
+            current_string = ""
+            string_start = -1
     
-    if current:
-        merged_anomalies.append(current)
+    # Check if we have a string at the end
+    if string_start != -1 and len(current_string) >= min_length:
+        result.append((current_string, string_start))
     
-    return merged_anomalies
+    return result
 
-
-def find_file_end(data: bytes, start_offset: int, file_type: str) -> int:
+def find_repeating_patterns(data: bytes, min_length=3, max_length=64) -> bytes:
     """
-    Attempt to find the end of an embedded file.
+    Find repeating byte patterns in the data.
     
     Args:
-        data: Binary data
-        start_offset: Starting offset of the file
-        file_type: Type of file to find end for
+        data: Binary data to analyze
+        min_length: Minimum pattern length to consider
+        max_length: Maximum pattern length to consider
         
     Returns:
-        End offset of the file
+        The repeating pattern, or None if none found
     """
-    if file_type == "PNG":
-        # PNG ends with IEND chunk
-        iend_marker = b'IEND\xaeB`\x82'
-        for i in range(start_offset, len(data) - 8):
-            if data[i:i+8] == iend_marker:
-                return i + 8
+    if len(data) < min_length * 2:
+        return None
     
-    elif file_type == "JPEG":
-        # JPEG ends with EOI marker (0xFF 0xD9)
-        for i in range(start_offset, len(data) - 2):
-            if data[i:i+2] == b'\xFF\xD9':
-                return i + 2
+    # Search for patterns of different lengths
+    for pattern_len in range(min_length, min(max_length + 1, len(data) // 2 + 1)):
+        for start in range(len(data) - pattern_len * 2 + 1):
+            pattern = data[start:start+pattern_len]
+            
+            # Look for at least 3 repetitions
+            repetitions = 1
+            pos = start + pattern_len
+            while pos + pattern_len <= len(data) and data[pos:pos+pattern_len] == pattern:
+                repetitions += 1
+                pos += pattern_len
+            
+            if repetitions >= 3:
+                return pattern
     
-    elif file_type == "GIF":
-        # GIF ends with file terminator (0x3B)
-        for i in range(start_offset, len(data) - 1):
-            if data[i] == 0x3B:
-                return i + 1
-    
-    elif file_type == "PDF":
-        # PDF ends with %%EOF marker
-        eof_marker = b'%%EOF'
-        for i in range(start_offset, len(data) - 5):
-            if data[i:i+5] == eof_marker:
-                return i + 5
-    
-    # For other types, use a reasonable fixed size
-    return min(start_offset + 10000, len(data))
+    return None
 
-
-def extract_ascii_strings(data: bytes, min_length: int = 4) -> List[str]:
+def detect_xor(data: bytes) -> int:
     """
-    Extract ASCII strings from binary data.
+    Detect if data might be XOR encoded.
     
     Args:
-        data: Binary data
-        min_length: Minimum string length
+        data: Binary data to analyze
         
     Returns:
-        List of extracted strings
+        Potential XOR key, or None if not detected
     """
-    # Define ASCII printable characters
-    ascii_chars = set(bytes(range(32, 127)))
+    if len(data) < 20:
+        return None
     
-    strings = []
-    current_string = []
+    # Try each possible byte value
+    best_key = None
+    best_score = 0
     
-    for byte in data:
-        if byte in ascii_chars:
-            current_string.append(byte)
-        else:
-            if len(current_string) >= min_length:
-                strings.append(bytes(current_string).decode('ascii'))
-            current_string = []
+    for key in range(1, 256):  # Skip 0 as it does nothing
+        # XOR the first N bytes
+        N = min(100, len(data))
+        xored = bytes([b ^ key for b in data[:N]])
+        
+        # Count printable ASCII characters
+        printable_count = sum(1 for b in xored if 32 <= b <= 126)
+        score = printable_count / N
+        
+        if score > 0.7 and score > best_score:
+            best_score = score
+            best_key = key
     
-    # Add the last string if it meets the minimum length
-    if len(current_string) >= min_length:
-        strings.append(bytes(current_string).decode('ascii'))
-    
-    return strings
+    return best_key
 
-
-def extract_utf16_strings(data: bytes, min_length: int = 4) -> List[str]:
+def detect_bit_shift(data: bytes) -> int:
     """
-    Extract UTF-16 strings from binary data.
+    Detect if data might be bit-shifted.
     
     Args:
-        data: Binary data
-        min_length: Minimum string length
+        data: Binary data to analyze
         
     Returns:
-        List of extracted strings
+        Number of bits shifted (positive for right, negative for left),
+        or None if not detected
     """
-    strings = []
+    if len(data) < 20:
+        return None
     
-    # Try both little and big endian
-    for encoding in ['utf-16le', 'utf-16be']:
-        offset = 0
-        while offset < len(data) - 1:
-            # Try to find start of a UTF-16 string
-            try:
-                end_offset = offset
-                while end_offset < len(data) - 1:
-                    # Check if this is a printable UTF-16 character
-                    try:
-                        char = data[end_offset:end_offset+2].decode(encoding)
-                        if not char.isprintable() and not char.isspace():
-                            break
-                        end_offset += 2
-                    except:
-                        break
-                
-                if end_offset > offset:
-                    str_len = (end_offset - offset) // 2
-                    if str_len >= min_length:
-                        string = data[offset:end_offset].decode(encoding)
-                        strings.append(string)
-                
-                offset = end_offset + 2
-            
-            except:
-                offset += 2
+    # Try different shifts
+    sample = data[:min(100, len(data))]
+    best_shift = None
+    best_score = 0
     
-    return strings
-
-
-def filter_strings(strings: List[str]) -> List[str]:
-    """
-    Filter and rank strings by interest level.
-    
-    Args:
-        strings: List of strings to filter
+    # Try right shifts
+    for shift in range(1, 8):
+        shifted = bytes([(b >> shift) | ((b << (8 - shift)) & 0xFF) for b in sample])
         
-    Returns:
-        Filtered and ranked list of strings
-    """
-    if not strings:
-        return []
+        # Count printable ASCII characters
+        printable_count = sum(1 for b in shifted if 32 <= b <= 126)
+        score = printable_count / len(shifted)
+        
+        if score > 0.7 and score > best_score:
+            best_score = score
+            best_shift = shift
     
-    # Remove duplicates
-    unique_strings = list(set(strings))
+    # Try left shifts
+    for shift in range(1, 8):
+        shifted = bytes([(b << shift) | (b >> (8 - shift)) for b in sample])
+        
+        # Count printable ASCII characters
+        printable_count = sum(1 for b in shifted if 32 <= b <= 126)
+        score = printable_count / len(shifted)
+        
+        if score > 0.7 and score > best_score:
+            best_score = score
+            best_shift = -shift
     
-    # Filter out strings that are likely noise
-    noise_patterns = [
-        r'^[A-Z0-9]+$',           # All caps and numbers
-        r'^[0-9]+$',              # All numbers
-        r'^[a-zA-Z0-9]{1,3}$',    # Very short strings
-    ]
-    
-    filtered = []
-    for string in unique_strings:
-        # Skip if matches a noise pattern
-        if any(re.match(pattern, string) for pattern in noise_patterns):
-            continue
-        
-        # Skip if too long
-        if len(string) > 200:
-            continue
-        
-        filtered.append(string)
-    
-    # Score strings by interest level
-    def score_string(s):
-        score = 0
-        
-        # Strings with special terms are more interesting
-        special_terms = ['password', 'key', 'secret', 'flag', 'token', 'hash', 'api', 'http']
-        for term in special_terms:
-            if term in s.lower():
-                score += 10
-        
-        # Strings with mixed case and special chars are more interesting
-        if any(c.isupper() for c in s) and any(c.islower() for c in s):
-            score += 3
-        
-        if any(c in s for c in '{}[]()=_-+*&^%$#@!'):
-            score += 2
-        
-        # Strings with more alphanumeric characters are more interesting
-        alpha_num_ratio = sum(c.isalnum() for c in s) / len(s)
-        score += alpha_num_ratio * 5
-        
-        # Penalize very common strings
-        common_strings = ['<?xml', '<html', '<!DOCTYPE', 'Microsoft', 'Windows']
-        if any(cs in s for cs in common_strings):
-            score -= 5
-        
-        return score
-    
-    # Sort by score (descending)
-    return sorted(filtered, key=score_string, reverse=True)
-
-
-def find_mismatched_sections(data: bytes, file_type: str) -> List[Dict[str, Any]]:
-    """
-    Find sections of data that don't match the expected file format.
-    
-    Args:
-        data: Binary data
-        file_type: Expected file type
-        
-    Returns:
-        List of potentially hidden sections
-    """
-    if not file_type or file_type == "bin":
-        return []
-    
-    mismatched_sections = []
-    
-    # Different analysis based on file type
-    if file_type in ["png", "jpg", "jpeg", "gif"]:
-        # For images, look for sections with high entropy
-        window_size = 512
-        stride = 256
-        
-        for i in range(0, len(data) - window_size, stride):
-            window = data[i:i+window_size]
-            entropy = calculate_entropy(window)
-            
-            # Image data typically has high entropy
-            expected_entropy = 7.0 if file_type == "jpg" else 5.5
-            
-            # Look for windows with unexpectedly low entropy
-            if abs(entropy - expected_entropy) > 1.5:
-                mismatched_sections.append({
-                    "offset": i,
-                    "size": window_size,
-                    "entropy": entropy,
-                })
-    
-    elif file_type in ["pdf", "doc", "docx"]:
-        # For documents, look for unexpected binary data
-        window_size = 1024
-        stride = 512
-        
-        for i in range(0, len(data) - window_size, stride):
-            window = data[i:i+window_size]
-            
-            # Count null bytes
-            null_ratio = window.count(0) / window_size
-            
-            # High concentration of nulls might indicate hidden data
-            if null_ratio > 0.7:
-                mismatched_sections.append({
-                    "offset": i,
-                    "size": window_size,
-                    "null_ratio": null_ratio,
-                })
-    
-    return mismatched_sections
-
-
-# Import math at the top level
-import math
+    return best_shift
