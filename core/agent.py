@@ -297,8 +297,11 @@ class CryptoAgent:
             state.add_insight("Using fallback mode (no API access available). Running basic analyzers only.", analyzer="agent")
 
             # Run through available analyzers without LLM guidance
-            from analyzers import get_all_analyzers
+            from analyzers import get_all_analyzers, get_analyzer
             analyzers = get_all_analyzers()
+
+            # Track if we've made progress
+            initial_insights_count = len(state.insights)
 
             for name, analyzer_func in analyzers.items():
                 try:
@@ -322,6 +325,18 @@ class CryptoAgent:
                 except Exception as e:
                     print(f"Error in {name}: {e}")
                     state.add_insight(f"Error in {name}: {e}", analyzer="agent")
+
+            # If we haven't made progress or found a solution, try code-based analysis
+            if len(state.insights) == initial_insights_count or not state.solution:
+                print("No progress made with basic analyzers. Trying code-based analysis...")
+                code_analyzer = get_analyzer("code_analyzer")
+                if code_analyzer:
+                    try:
+                        state.add_insight("No progress with basic analyzers. Switching to code-based analysis.", analyzer="agent")
+                        state = code_analyzer(state, task_description="Generate and execute Python code to solve this puzzle when other analyzers have failed")
+                    except Exception as e:
+                        print(f"Error in code_analyzer: {e}")
+                        state.add_insight(f"Error in code_analyzer: {e}", analyzer="agent")
 
             return state
 
@@ -354,8 +369,23 @@ class CryptoAgent:
 
                 # Check if we've made progress
                 if previous_insights_count == len(state.insights) and iteration > 1:
-                    print("No new insights gained in this iteration. Trying direct solution...")
-                    self._attempt_direct_solution(state)
+                    print("No new insights gained in this iteration. Trying code-based analysis...")
+                    # Try code-based analysis first
+                    from analyzers import get_analyzer
+                    code_analyzer = get_analyzer("code_analyzer")
+                    if code_analyzer:
+                        print("Running code-based analysis...")
+                        state.add_insight("No new insights gained. Switching to code-based analysis.", analyzer="agent")
+                        state = code_analyzer(state, task_description="Analyze this puzzle and try to find a solution when other analyzers have failed")
+
+                        # If code analysis didn't find a solution, try direct solution
+                        if not state.solution:
+                            print("Code-based analysis didn't find a solution. Trying direct solution...")
+                            self._attempt_direct_solution(state)
+                    else:
+                        # Fallback to direct solution if code analyzer not available
+                        print("Code analyzer not available. Trying direct solution...")
+                        self._attempt_direct_solution(state)
 
                 previous_insights_count = len(state.insights)
 
@@ -375,8 +405,23 @@ class CryptoAgent:
                 print("Selecting strategy...")
                 strategy_result = self._select_strategy(state, assessment)
                 if not strategy_result:
-                    print("Failed to select a strategy. Trying direct solution...")
-                    self._attempt_direct_solution(state)
+                    print("Failed to select a strategy. Trying code-based analysis...")
+                    # Try code-based analysis first
+                    from analyzers import get_analyzer
+                    code_analyzer = get_analyzer("code_analyzer")
+                    if code_analyzer:
+                        print("Running code-based analysis...")
+                        state.add_insight("Failed to select a strategy. Switching to code-based analysis.", analyzer="agent")
+                        state = code_analyzer(state, task_description="Generate and execute Python code to solve this puzzle when no clear strategy is available")
+
+                        # If code analysis didn't find a solution, try direct solution
+                        if not state.solution:
+                            print("Code-based analysis didn't find a solution. Trying direct solution...")
+                            self._attempt_direct_solution(state)
+                    else:
+                        # Fallback to direct solution if code analyzer not available
+                        print("Code analyzer not available. Trying direct solution...")
+                        self._attempt_direct_solution(state)
                     break
 
                 # Extract and execute the strategy
