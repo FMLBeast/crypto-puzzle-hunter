@@ -1085,7 +1085,7 @@ class CryptoAgent:
             "text": p.get("text", "")
         } for p in state.patterns], indent=2)
 
-        # Include previous results if available
+        # Create context with previous_results always included
         context = {
             "state_summary": state_summary,
             "assessment": assessment,
@@ -1093,10 +1093,8 @@ class CryptoAgent:
             "insights": insights,
             "patterns": patterns,
             "chat_history": self.chat_history,
+            "previous_results": previous_results or "No previous results available"  # Always include this
         }
-
-        if previous_results:
-            context["previous_results"] = previous_results
 
         try:
             result = self.strategy_chain.invoke(context)
