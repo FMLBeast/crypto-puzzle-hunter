@@ -8,351 +8,100 @@ import time
 import mimetypes
 import hashlib
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Set
+from dataclasses import dataclass, field
 
 from core.logger import solution_logger
 
+@dataclass
 class State:
-    """
-    Class to track the state of puzzle analysis.
-    """
-    def __init__(self, puzzle_file: Optional[str] = None):
-        """
-        Initialize the analysis state.
+    puzzle_file: Optional[str] = None
+    puzzle_text: Optional[str] = None
+    binary_data: Optional[bytes] = None
+    file_type: Optional[str] = None
+    file_size: Optional[int] = None
 
-        Args:
-            puzzle_file: Optional filename of the puzzle
-        """
-        self.puzzle_file = puzzle_file  # Main puzzle file name
-        self.puzzle_text = None         # Text content (if text file)
-        self.binary_data = None         # Binary content (if binary file)
-        self.file_type = None           # File type (determined from extension or content)
-        self.file_size = None           # File size in bytes
-        self.puzzle_type = "Unknown"    # Type of puzzle (e.g., steganography, cryptography)
-        self.insights = []              # List of insights gathered during analysis
-        self.transformations = []       # List of transformations applied
-        self.solution = None            # Puzzle solution (if found)
-        self.related_files = {}         # Related files that are part of the puzzle
-        self.clues = []                 # Clues associated with this puzzle
-        self.patterns = []              # Patterns from similar puzzles or techniques
+    related_files: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    clues: List[Dict[str, Any]] = field(default_factory=list)
+    patterns: List[Dict[str, Any]] = field(default_factory=list)
 
-        if puzzle_file:
-            self._detect_file_type()
+    insights: List[Dict[str, Any]] = field(default_factory=list)
+    transformations: List[Dict[str, Any]] = field(default_factory=list)
 
-    def _detect_file_type(self):
-        """Detect the file type based on the filename."""
+    solution: Optional[str] = None
+
+    # Track which analyzers we’ve already tried (to avoid immediate repeats)
+    attempted_analyzers: Set[str] = field(default_factory=set)
+
+    def __post_init__(self):
         if self.puzzle_file:
-            # Get file extension
-            ext = os.path.splitext(self.puzzle_file)[1].lower()
-            self.file_type = ext[1:] if ext else "unknown"
+            self._load_file()
 
-    def is_binary(self) -> bool:
-        """Check if the puzzle is a binary file."""
-        if not self.file_type:
-            return False
+    def _load_file(self):
+        """Load puzzle_file into binary_data or puzzle_text based on type."""
+        path = Path(self.puzzle_file)
+        self.file_size = path.stat().st_size
+        self.file_type, _ = mimetypes.guess_type(path.name)
+        if self.file_type and self.file_type.startswith("text"):
+            txt = path.read_text(errors="ignore")
+            self.set_puzzle_text(txt)
+        else:
+            data = path.read_bytes()
+            self.set_binary_data(data)
 
-        # List of known binary file types
-        binary_types = [
-            "png", "jpg", "jpeg", "gif", "bmp", "tiff", "ico", "webp",
-            "pdf", "doc", "docx", "xls", "xlsx", "zip", "rar", "tar", "gz",
-            "exe", "dll", "bin", "iso", "mp3", "mp4", "wav", "avi", "mov",
-            "class", "jar", "war", "html"  # Added HTML to support steganography in HTML files
-        ]
+    def add_insight(self, analyzer: str, text: str) -> None:
+        ts = time.strftime("%H:%M:%S")
+        self.insights.append({"time": ts, "analyzer": analyzer, "text": text})
+        solution_logger.log_insight(analyzer, text, ts)
 
-        return self.file_type in binary_types or self.binary_data is not None
-
-    def is_binary_file(self, file_path) -> bool:
-        """Check if a file is binary based on its path."""
-        ext = os.path.splitext(file_path)[1].lower()
-        file_type = ext[1:] if ext else "unknown"
-
-        # List of known binary file types
-        binary_types = [
-            "png", "jpg", "jpeg", "gif", "bmp", "tiff", "ico", "webp",
-            "pdf", "doc", "docx", "xls", "xlsx", "zip", "rar", "tar", "gz",
-            "exe", "dll", "bin", "iso", "mp3", "mp4", "wav", "avi", "mov",
-            "class", "jar", "war", "html"  # Added HTML to support steganography in HTML files
-        ]
-
-        return file_type in binary_types
-
-    def set_puzzle_file(self, filename: str) -> None:
-        """
-        Set the puzzle filename.
-
-        Args:
-            filename: Name of the puzzle file
-        """
-        self.puzzle_file = filename
-        self._detect_file_type()
-
-    def set_puzzle_text(self, text: str) -> None:
-        """
-        Set the puzzle text content.
-
-        Args:
-            text: Text content of the puzzle
-        """
-        self.puzzle_text = text
-        self.file_size = len(text.encode("utf-8"))
-
-    def set_puzzle_type(self, puzzle_type: str) -> None:
-        """
-        Set the puzzle type.
-
-        Args:
-            puzzle_type: Type of the puzzle (e.g., steganography, cryptography)
-        """
-        self.puzzle_type = puzzle_type
-
-    def set_binary_data(self, data: bytes) -> None:
-        """
-        Set the puzzle binary data.
-
-        Args:
-            data: Binary content of the puzzle
-        """
-        self.binary_data = data
-        self.file_size = len(data)
-
-    def add_insight(self, text: str, analyzer: str) -> None:
-        """
-        Add an insight to the analysis state.
-
-        Args:
-            text: Insight text
-            analyzer: Name of the analyzer that generated the insight
-        """
-        current_time = time.strftime("%H:%M:%S")
-        self.insights.append({
-            "time": current_time,
-            "analyzer": analyzer,
-            "text": text
-        })
-
-        # Log the insight in real-time
-        solution_logger.log_insight(text, analyzer, current_time)
-
-    def add_transformation(self, name: str, description: str, 
-                           input_data: str, output_data: str, 
+    def add_transformation(self, name: str, description: str,
+                           input_data: Any, output_data: Any,
                            analyzer: str) -> None:
-        """
-        Add a transformation to the analysis state.
-
-        Args:
-            name: Name of the transformation
-            description: Description of what the transformation does
-            input_data: Input data for the transformation
-            output_data: Output data from the transformation
-            analyzer: Name of the analyzer that performed the transformation
-        """
-        current_time = time.strftime("%H:%M:%S")
+        ts = time.strftime("%H:%M:%S")
         self.transformations.append({
-            "time": current_time,
+            "time": ts,
             "name": name,
             "description": description,
             "input_data": input_data,
             "output_data": output_data,
             "analyzer": analyzer
         })
+        solution_logger.log_transformation(name, description, input_data, output_data, analyzer, ts)
 
-        # Log the transformation in real-time
-        solution_logger.log_transformation(name, description, input_data, output_data, analyzer, current_time)
+        # **NEW**: if this transformation provides text, promote it to puzzle_text
+        if name == "Image LSB" or name == "PNG Text Chunk":
+            if not self.puzzle_text or len(output_data) > len(self.puzzle_text):
+                self.set_puzzle_text(output_data)
 
-    def set_solution(self, solution: str) -> None:
-        """
-        Set the solution for the puzzle.
+    def set_puzzle_text(self, txt: str) -> None:
+        """Promote extracted text into puzzle_text and log it."""
+        self.puzzle_text = txt
+        self.add_insight("state", f"Puzzle text set ({len(txt)} chars)")
 
-        Args:
-            solution: Solution to the puzzle
-        """
-        self.solution = solution
+    def set_binary_data(self, data: bytes) -> None:
+        """Store binary data and record insight."""
+        self.binary_data = data
+        self.file_size = len(data)
+        self.add_insight("state", f"Binary data set ({self.file_size} bytes)")
 
-        # Log the solution in real-time
-        solution_logger.log_solution(solution)
+    def set_solution(self, sol: str) -> None:
+        """Record the solution and log it."""
+        self.solution = sol
+        self.add_insight("state", f"Solution found: {sol}")
 
     def add_related_file(self, filename: str, content: bytes) -> None:
-        """
-        Add a related file that is part of the puzzle.
+        sha = hashlib.sha256(content).hexdigest()
+        self.related_files[filename] = {"content": content, "size": len(content), "sha256": sha}
 
-        Args:
-            filename: Name of the related file
-            content: Content of the related file
-        """
-        # Determine if the file is binary or text
-        text_content = None
-        try:
-            # Try to decode as text
-            text_content = content.decode("utf-8", errors="replace")
-        except:
-            # Binary file, leave text_content as None
-            pass
+    def is_binary(self) -> bool:
+        return self.binary_data is not None
 
-        self.related_files[filename] = {
-            "filename": filename,
-            "content": content,
-            "text_content": text_content,
-            "size": len(content),
-            "mime_type": mimetypes.guess_type(filename)[0] or "application/octet-stream",
-            "sha256": hashlib.sha256(content).hexdigest()
-        }
+    def is_text(self) -> bool:
+        return self.puzzle_text is not None
 
-    def add_clue(self, clue_text: str, clue_file: str = None) -> None:
-        """
-        Add a clue to the puzzle.
-
-        Args:
-            clue_text: Text of the clue
-            clue_file: Optional filename of the clue file
-        """
-        self.clues.append({
-            "text": clue_text,
-            "file": clue_file,
-            "time": time.strftime("%H:%M:%S")
-        })
-
-    def add_pattern(self, pattern_text: str, pattern_file: str = None, category: str = None) -> None:
-        """
-        Add a pattern from similar puzzles or techniques.
-
-        Args:
-            pattern_text: Text of the pattern
-            pattern_file: Optional filename of the pattern file
-            category: Optional category of the pattern
-        """
-        self.patterns.append({
-            "text": pattern_text,
-            "file": pattern_file,
-            "category": category,
-            "time": time.strftime("%H:%M:%S")
-        })
-
-    def get_related_file(self, filename: str) -> Dict[str, Any]:
-        """
-        Get a related file by name.
-
-        Args:
-            filename: Name of the related file
-
-        Returns:
-            Dictionary with file information
-        """
-        return self.related_files.get(filename)
-
-    def get_all_related_files(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Get all related files.
-
-        Returns:
-            Dictionary of all related files
-        """
-        return self.related_files
-
-    def get_summary(self) -> str:
-        """
-        Get a summary of the current state.
-
-        Returns:
-            Summary string
-        """
-        summary = f"File: {self.puzzle_file or 'Not specified'}\n"
-        summary += f"Type: {self.file_type or 'Unknown'}\n"
-        summary += f"Size: {self.file_size or 0} bytes\n"
-        summary += f"Puzzle Type: {self.puzzle_type}\n"
-        summary += f"Insights: {len(self.insights)}\n"
-        summary += f"Transformations: {len(self.transformations)}\n"
-        summary += f"Related files: {len(self.related_files)}\n"
-        summary += f"Clues: {len(self.clues)}\n"
-        summary += f"Patterns: {len(self.patterns)}\n"
-
-        # Add related files list
-        if self.related_files:
-            summary += "Related files:\n"
-            for filename, file_info in self.related_files.items():
-                summary += f"  - {filename} ({file_info['size']} bytes)\n"
-
-        # Add clues
-        if self.clues:
-            summary += "Clues:\n"
-            for clue in self.clues:
-                summary += f"  - {clue['text'][:50]}{'...' if len(clue['text']) > 50 else ''}\n"
-
-        # Add patterns
-        if self.patterns:
-            summary += "Patterns:\n"
-            for pattern in self.patterns:
-                category = pattern.get('category', 'Unknown')
-                summary += f"  - [{category}] {pattern['text'][:50]}{'...' if len(pattern['text']) > 50 else ''}\n"
-
-        return summary
-
-    def get_content_sample(self, max_size: int = 1000, max_binary_size: int = None) -> str:
-        """
-        Get a sample of the puzzle content for analysis.
-
-        Args:
-            max_size: Maximum size of the sample for text content
-            max_binary_size: Maximum size for binary data (defaults to max_size/4 if None)
-
-        Returns:
-            Content sample
-        """
-        if self.puzzle_text:
-            # Text content
-            return self.puzzle_text[:max_size]
-        elif self.binary_data:
-            # For binary data, use a smaller sample size to avoid context length issues
-            # Binary data becomes 2x larger when converted to hex
-            if max_binary_size is None:
-                # Default to a quarter of max_size to account for hex expansion
-                max_binary_size = max(100, max_size // 4)
-
-            # If the binary data is very large, provide a summary instead of raw hex
-            if len(self.binary_data) > 100000:  # 100KB
-                sample = self.binary_data[:max_binary_size].hex()
-                return f"Large binary file ({self.file_size} bytes). First {max_binary_size} bytes (hex): {sample}"
-            else:
-                return self.binary_data[:max_binary_size].hex()
-
-        return "No content available"
-
-    def get_all_text_content(self) -> Dict[str, str]:
-        """
-        Get all text content from all files.
-
-        Returns:
-            Dictionary mapping filenames to their text content
-        """
-        result = {}
-
-        # Add main puzzle file if it's text
-        if self.puzzle_text and self.puzzle_file:
-            result[self.puzzle_file] = self.puzzle_text
-
-        # Add all related text files
-        for filename, file_info in self.related_files.items():
-            if file_info.get("text_content"):
-                result[filename] = file_info["text_content"]
-
-        return result
-
-    def merge_related_state(self, other_state) -> None:
-        """
-        Merge another state's related files, insights, and transformations into this state.
-
-        Args:
-            other_state: Another State object to merge from
-        """
-        # Merge related files
-        for filename, file_info in other_state.related_files.items():
-            if filename not in self.related_files:
-                self.related_files[filename] = file_info
-
-        # Merge insights
-        self.insights.extend(other_state.insights)
-
-        # Merge transformations
-        self.transformations.extend(other_state.transformations)
-
-        # Merge clues
-        self.clues.extend(other_state.clues)
+    def merge(self, other: "State") -> None:
+        """Merge insights/transformations from another state (if needed)."""
+        self.related_files.update(other.related_files)
+        self.insights.extend(other.insights)
+        self.transformations.extend(other.transformations)
+        self.clues.extend(other.clues)
