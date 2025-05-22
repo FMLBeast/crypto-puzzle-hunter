@@ -42,12 +42,37 @@ class State:
         if self.puzzle_file:
             self._load_file()
 
+    def set_puzzle_file(self, file_path: str) -> None:
+        """Set the puzzle file and load its content"""
+        if not file_path:
+            return
+
+        # Convert to Path object to handle both relative and absolute paths
+        path = Path(file_path)
+
+        # If the path doesn't exist and it's just a filename,
+        # try to find it in the current directory or common puzzle locations
+        if not path.exists() and not path.is_absolute():
+            # Try current directory first
+            if Path(file_path).exists():
+                path = Path(file_path)
+            # Try in puzzles directory
+            elif Path("puzzles") / file_path:
+                possible_path = Path("puzzles") / file_path
+                if possible_path.exists():
+                    path = possible_path
+
+        self.puzzle_file = str(path)
+        self._load_file()
+        self.add_insight(f"Puzzle file set to: {self.puzzle_file}", analyzer="state")
+
     def _load_file(self):
         """Load puzzle_file into binary_data or puzzle_text based on type."""
         try:
             path = Path(self.puzzle_file)
 
             if not path.exists():
+                self.add_insight(f"Warning: Puzzle file not found: {self.puzzle_file}", analyzer="state")
                 return
 
             self.file_size = path.stat().st_size
@@ -70,7 +95,7 @@ class State:
                 self.set_binary_data(data)
 
         except Exception as e:
-            self.add_insight("system", f"Error loading file: {e}")
+            self.add_insight(f"Error loading file: {e}", analyzer="state")
 
     def add_insight(self, text: str, analyzer: str) -> None:
         """Add an insight with proper formatting"""
@@ -171,7 +196,7 @@ class State:
         # Only update if it's different and substantial
         if self.puzzle_text != clean_text and len(clean_text) > 5:
             self.puzzle_text = clean_text
-            self.add_insight("system", f"Puzzle text updated ({len(clean_text)} chars)")
+            self.add_insight(f"Puzzle text updated ({len(clean_text)} chars)", analyzer="state")
 
             # Try to determine puzzle type from content
             self._infer_puzzle_type()
@@ -188,7 +213,7 @@ class State:
         if not self.hash:
             self.hash = hashlib.sha256(data).hexdigest()[:16]
 
-        self.add_insight("system", f"Binary data set ({self.file_size} bytes)")
+        self.add_insight(f"Binary data set ({self.file_size} bytes)", analyzer="state")
 
     def set_solution(self, sol: str) -> None:
         """Record the solution and log it"""
@@ -199,7 +224,7 @@ class State:
         self.solution = clean_solution
         self.status = "solved"
 
-        self.add_insight("system", f"Solution found: {clean_solution}")
+        self.add_insight(f"Solution found: {clean_solution}", analyzer="state")
         solution_logger.log_solution(clean_solution)
 
     def add_related_file(self, filename: str, content: bytes) -> None:
