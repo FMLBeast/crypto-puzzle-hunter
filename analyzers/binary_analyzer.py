@@ -419,28 +419,34 @@ def check_for_unusual_patterns(state: State, data: bytes) -> None:
         )
         
         # Add transformation to show the first bytes of the XORed data
-        xored_data = bytes([b ^ xor_key for b in data[:100]])
-        
-        # Try to decode as text
         try:
-            xored_text = xored_data.decode('utf-8', errors='replace')
-            state.add_transformation(
-                name="XOR Decoded",
-                description=f"First 100 bytes XORed with 0x{xor_key:02X}",
-                input_data=data[:100].hex(),
-                output_data=f"Hex: {xored_data.hex()}\nText: {xored_text}",
+            xored_data = bytes([b ^ xor_key for b in data[:100]])
+
+            # Try to decode as text
+            try:
+                xored_text = xored_data.decode('utf-8', errors='replace')
+                state.add_transformation(
+                    name="XOR Decoded",
+                    description=f"First 100 bytes XORed with 0x{xor_key:02X}",
+                    input_data=data[:100].hex(),
+                    output_data=f"Hex: {xored_data.hex()}\nText: {xored_text}",
+                    analyzer="binary_analyzer"
+                )
+            except:
+                state.add_transformation(
+                    name="XOR Decoded",
+                    description=f"First 100 bytes XORed with 0x{xor_key:02X}",
+                    input_data=data[:100].hex(),
+                    output_data=xored_data.hex(),
+                    analyzer="binary_analyzer"
+                )
+        except Exception as e:
+            state.add_insight(
+                f"Error applying XOR with key 0x{xor_key:02X}: {e}",
                 analyzer="binary_analyzer"
             )
-        except:
-            state.add_transformation(
-                name="XOR Decoded",
-                description=f"First 100 bytes XORed with 0x{xor_key:02X}",
-                input_data=data[:100].hex(),
-                output_data=xored_data.hex(),
-                analyzer="binary_analyzer"
-            )
-    
-    # Check for bit shifting
+
+    # Check for bit shifting - FIXED VERSION
     bit_shift = detect_bit_shift(data)
     if bit_shift is not None:
         dir_str = "right" if bit_shift > 0 else "left"
@@ -453,18 +459,18 @@ def check_for_unusual_patterns(state: State, data: bytes) -> None:
 def find_strings(data: bytes, min_length=4) -> list:
     """
     Find ASCII strings in binary data.
-    
+
     Args:
         data: Binary data to search
         min_length: Minimum string length to consider
-        
+
     Returns:
         List of tuples (string, offset)
     """
     result = []
     current_string = ""
     string_start = -1
-    
+
     for i, byte in enumerate(data):
         if 32 <= byte <= 126:  # ASCII printable character
             if string_start == -1:
@@ -475,118 +481,130 @@ def find_strings(data: bytes, min_length=4) -> list:
                 result.append((current_string, string_start))
             current_string = ""
             string_start = -1
-    
+
     # Check if we have a string at the end
     if string_start != -1 and len(current_string) >= min_length:
         result.append((current_string, string_start))
-    
+
     return result
 
 def find_repeating_patterns(data: bytes, min_length=3, max_length=64) -> bytes:
     """
     Find repeating byte patterns in the data.
-    
+
     Args:
         data: Binary data to analyze
         min_length: Minimum pattern length to consider
         max_length: Maximum pattern length to consider
-        
+
     Returns:
         The repeating pattern, or None if none found
     """
     if len(data) < min_length * 2:
         return None
-    
+
     # Search for patterns of different lengths
     for pattern_len in range(min_length, min(max_length + 1, len(data) // 2 + 1)):
         for start in range(len(data) - pattern_len * 2 + 1):
             pattern = data[start:start+pattern_len]
-            
+
             # Look for at least 3 repetitions
             repetitions = 1
             pos = start + pattern_len
             while pos + pattern_len <= len(data) and data[pos:pos+pattern_len] == pattern:
                 repetitions += 1
                 pos += pattern_len
-            
+
             if repetitions >= 3:
                 return pattern
-    
+
     return None
 
 def detect_xor(data: bytes) -> int:
     """
     Detect if data might be XOR encoded.
-    
+
     Args:
         data: Binary data to analyze
-        
+
     Returns:
         Potential XOR key, or None if not detected
     """
     if len(data) < 20:
         return None
-    
+
     # Try each possible byte value
     best_key = None
     best_score = 0
-    
+
     for key in range(1, 256):  # Skip 0 as it does nothing
         # XOR the first N bytes
         N = min(100, len(data))
-        xored = bytes([b ^ key for b in data[:N]])
-        
-        # Count printable ASCII characters
-        printable_count = sum(1 for b in xored if 32 <= b <= 126)
-        score = printable_count / N
-        
-        if score > 0.7 and score > best_score:
-            best_score = score
-            best_key = key
-    
+        try:
+            xored = bytes([b ^ key for b in data[:N]])
+
+            # Count printable ASCII characters
+            printable_count = sum(1 for b in xored if 32 <= b <= 126)
+            score = printable_count / N
+
+            if score > 0.7 and score > best_score:
+                best_score = score
+                best_key = key
+        except Exception:
+            # Skip if XOR operation fails
+            continue
+
     return best_key
 
 def detect_bit_shift(data: bytes) -> int:
     """
     Detect if data might be bit-shifted.
-    
+
     Args:
         data: Binary data to analyze
-        
+
     Returns:
         Number of bits shifted (positive for right, negative for left),
         or None if not detected
     """
     if len(data) < 20:
         return None
-    
+
     # Try different shifts
     sample = data[:min(100, len(data))]
     best_shift = None
     best_score = 0
-    
+
     # Try right shifts
     for shift in range(1, 8):
-        shifted = bytes([(b >> shift) | ((b << (8 - shift)) & 0xFF) for b in sample])
-        
-        # Count printable ASCII characters
-        printable_count = sum(1 for b in shifted if 32 <= b <= 126)
-        score = printable_count / len(shifted)
-        
-        if score > 0.7 and score > best_score:
-            best_score = score
-            best_shift = shift
-    
+        try:
+            shifted = bytes([((b >> shift) | ((b << (8 - shift)) & 0xFF)) & 0xFF for b in sample])
+
+            # Count printable ASCII characters
+            printable_count = sum(1 for b in shifted if 32 <= b <= 126)
+            score = printable_count / len(shifted)
+
+            if score > 0.7 and score > best_score:
+                best_score = score
+                best_shift = shift
+        except Exception:
+            # Skip if bit operations fail
+            continue
+
     # Try left shifts
     for shift in range(1, 8):
-        shifted = bytes([(b << shift) | (b >> (8 - shift)) for b in sample])
-        
-        # Count printable ASCII characters
-        printable_count = sum(1 for b in shifted if 32 <= b <= 126)
-        score = printable_count / len(shifted)
-        
-        if score > 0.7 and score > best_score:
-            best_score = score
-            best_shift = -shift
-    
+        try:
+            shifted = bytes([((b << shift) | (b >> (8 - shift))) & 0xFF for b in sample])
+
+            # Count printable ASCII characters
+            printable_count = sum(1 for b in shifted if 32 <= b <= 126)
+            score = printable_count / len(shifted)
+
+            if score > 0.7 and score > best_score:
+                best_score = score
+                best_shift = -shift
+        except Exception:
+            # Skip if bit operations fail
+            continue
+
     return best_shift
