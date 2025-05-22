@@ -2,14 +2,38 @@
 Analyzers module for Crypto Hunter.
 """
 
-from analyzers.base import register_analyzer, analyzer_compatibility, get_analyzer, get_all_analyzers, get_compatible_analyzers
-from analyzers.text_analyzer import analyze_text
-from analyzers.binary_analyzer import analyze_binary
-from analyzers.cipher_analyzer import analyze_ciphers
-from analyzers.encoding_analyzer import analyze_encodings
-from analyzers.image_analyzer import analyze_image
-from analyzers.web_analyzer import analyze_web
-from analyzers.vision_analyzer import analyze_vision
-from analyzers.code_analyzer import analyze_code
+import importlib
+from typing import Dict, Callable
 
-# Import additional analyzers as they are added
+# Lazy import to avoid circular dependencies
+_analyzer_modules = {
+    'text_analyzer': 'analyzers.text_analyzer',
+    'binary_analyzer': 'analyzers.binary_analyzer',
+    'cipher_analyzer': 'analyzers.cipher_analyzer',
+    'encoding_analyzer': 'analyzers.encoding_analyzer',
+    'image_analyzer': 'analyzers.image_analyzer',
+    'vision_analyzer': 'analyzers.vision_analyzer',
+    'web_analyzer': 'analyzers.web_analyzer',
+    'code_analyzer': 'analyzers.code_analyzer',
+    'crypto_analyzer': 'analyzers.crypto_analyzer'
+}
+
+def _ensure_modules_loaded():
+    """Ensure all analyzer modules are loaded"""
+    for module_name in _analyzer_modules.values():
+        try:
+            importlib.import_module(module_name)
+        except ImportError as e:
+            print(f"Warning: Could not load {module_name}: {e}")
+
+# Import base functionality
+from analyzers.base import (
+    register_analyzer,
+    analyzer_compatibility,
+    get_analyzer,
+    get_all_analyzers,
+    get_compatible_analyzers
+)
+
+# Ensure modules are loaded when this package is imported
+_ensure_modules_loaded()

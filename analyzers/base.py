@@ -4,6 +4,7 @@ Provides registration mechanisms and utility functions.
 """
 
 import functools
+import inspect
 from typing import Dict, Callable, Any, List
 
 # Registry of analyzers
@@ -52,20 +53,29 @@ def analyzer_compatibility(**kwargs):
                 )
                 return state
 
-            # Filter out any parameters that aren't accepted by the analyzer function
-            import inspect
+            # Check if the function accepts **kwargs
             sig = inspect.signature(func)
-            valid_params = {}
-            for param_name, param in func_kwargs.items():
-                if param_name in sig.parameters:
-                    valid_params[param_name] = param
-                else:
-                    state.add_insight(
-                        f"Warning: Parameter '{param_name}' is not accepted by {func.__name__} and will be ignored",
-                        analyzer="compatibility_check"
-                    )
+            has_var_keyword = any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in sig.parameters.values()
+            )
 
-            # If all requirements are met, run the analyzer with valid parameters only
+            if has_var_keyword:
+                # Function accepts **kwargs, so pass all parameters through
+                valid_params = func_kwargs
+            else:
+                # Filter out any parameters that aren't accepted by the analyzer function
+                valid_params = {}
+                for param_name, param in func_kwargs.items():
+                    if param_name in sig.parameters:
+                        valid_params[param_name] = param
+                    else:
+                        state.add_insight(
+                            f"Warning: Parameter '{param_name}' is not accepted by {func.__name__} and will be ignored",
+                            analyzer="compatibility_check"
+                        )
+
+            # If all requirements are met, run the analyzer with valid parameters
             return func(state, **valid_params)
 
         # Copy compatibility info to the wrapper function
