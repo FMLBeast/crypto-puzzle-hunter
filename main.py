@@ -307,14 +307,35 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
         print_state_details(final_state)
 
     # Save results
-    result_path = os.path.join(results_dir, f"{folder_path.name}_results.json")
-    with open(result_path, "w") as f:
-        json.dump({
-            "status": "completed",
-            "solution": final_state.solution,
-            "insights": final_state.insights,
-            "transformations": final_state.transformations
-        }, f, indent=2)
+    # Save comprehensive results using enhanced saver
+    try:
+        from core.enhanced_state_saver import enhanced_saver
+        saved_files = enhanced_saver.save_comprehensive_results(final_state, str(folder_path))
+
+        console.print(f"\n[bold green]Results saved successfully![/bold green]")
+        console.print(f"Generated {len(saved_files)} output files:")
+
+        # Show key files to user
+        key_files = ["summary", "html_report", "potential_keys_txt", "compressed_archive"]
+        for key_file in key_files:
+            if key_file in saved_files:
+                console.print(f"  [cyan]{key_file}:[/cyan] {saved_files[key_file]}")
+
+        if "html_report" in saved_files:
+            console.print(
+                f"\n[bold blue]💡 Tip:[/bold blue] Open the HTML report for a comprehensive view: {saved_files['html_report']}")
+
+    except Exception as save_error:
+        console.print(f"[bold red]Warning: Enhanced save failed, using basic save: {save_error}[/bold red]")
+        # Fallback to basic save
+        result_path = os.path.join(results_dir, f"{folder_path.name}_results.json")
+        with open(result_path, "w") as f:
+            json.dump({
+                "status": "completed",
+                "solution": final_state.solution,
+                "insights": final_state.insights,
+                "transformations": final_state.transformations
+            }, f, indent=2)
 
     return final_state
 
@@ -440,15 +461,36 @@ def process_puzzle(puzzle_path, agent, output_dir="./output", iterations=5, resu
             console.print(f"\n[bold]Analysis completed after {iterations} iterations.[/bold]")
             print_state_details(final_state)
 
-        # Save results
-        result_path = os.path.join(results_dir, f"{path.name}_results.json")
-        with open(result_path, "w") as f:
-            json.dump({
-                "status": "completed",
-                "solution": final_state.solution,
-                "insights": final_state.insights,
-                "transformations": final_state.transformations
-            }, f, indent=2)
+        # Save comprehensive results using enhanced saver
+        # Save comprehensive results using enhanced saver
+        try:
+            from core.enhanced_state_saver import enhanced_saver
+            saved_files = enhanced_saver.save_comprehensive_results(final_state, str(path))
+
+            console.print(f"\n[bold green]Results saved successfully![/bold green]")
+            console.print(f"Generated {len(saved_files)} output files:")
+
+            # Show key files to user
+            key_files = ["summary", "html_report", "potential_keys_txt", "compressed_archive"]
+            for key_file in key_files:
+                if key_file in saved_files:
+                    console.print(f"  [cyan]{key_file}:[/cyan] {saved_files[key_file]}")
+
+            if "html_report" in saved_files:
+                console.print(
+                    f"\n[bold blue]💡 Tip:[/bold blue] Open the HTML report for a comprehensive view: {saved_files['html_report']}")
+
+        except Exception as save_error:
+            console.print(f"[bold red]Warning: Enhanced save failed, using basic save: {save_error}[/bold red]")
+            # Fallback to basic save
+            result_path = os.path.join(results_dir, f"{path.name}_results.json")
+            with open(result_path, "w") as f:
+                json.dump({
+                    "status": "completed",
+                    "solution": final_state.solution,
+                    "insights": final_state.insights,
+                    "transformations": final_state.transformations
+                }, f, indent=2)
 
     # Display results
     if final_state:
