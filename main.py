@@ -214,7 +214,8 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
     if not state.puzzle_file and files:
         first_file = files[0]
         if first_file.is_file():
-            state.set_puzzle_file(first_file.name)
+            # Fix: Pass the full path, not just the name
+            state.set_puzzle_file(str(first_file))
 
             # For binary files, we'll need to handle differently
             if state.is_binary():
