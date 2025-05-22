@@ -124,7 +124,8 @@ def test_dependencies():
         'PIL': 'pillow',
         'numpy': 'numpy',
         'cv2': 'opencv-python',
-        'scipy': 'scipy'
+        'scipy': 'scipy',
+        'bs4': 'beautifulsoup4'
     }
 
     available = {}
@@ -170,7 +171,7 @@ def main():
     if not all_passed:
         print("\nNext steps:")
         if not results.get("Dependencies", True):
-            print("- Install missing dependencies: pip install pillow numpy opencv-python scipy")
+            print("- Install missing dependencies: pip install pillow numpy opencv-python scipy beautifulsoup4")
         if not results.get("Enhanced State", True):
             print("- Check core/state.py implementation")
         if not results.get("Enhanced Image Analyzer", True):

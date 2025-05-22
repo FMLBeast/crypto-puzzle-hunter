@@ -84,17 +84,19 @@ Return your answer in this format:
 }}
 ```
 
-Available analyzers:
+Available analyzers (ONLY use analyzers from this list):
 - text_analyzer: For analyzing text patterns and encodings
 - binary_analyzer: For analyzing binary data
 - image_analyzer: For analyzing images (steganography)
 - cipher_analyzer: For detecting and solving classical ciphers (params: cipher_type, input_data)
 - encoding_analyzer: For detecting and decoding various encodings
 - blockchain_analyzer: For analyzing crypto addresses and data
-- hash_analyzer: For analyzing and potentially cracking hashes
+- crypto_analyzer: For analyzing cryptographic elements including hashes, keys, and signatures
 - code_analyzer: For generating and executing Python code to solve the puzzle
 - vision_analyzer: For analyzing images using computer vision techniques
 - web_analyzer: For analyzing web-related content and URLs
+
+IMPORTANT: Do NOT suggest analyzers that are not in the above list. If you need functionality that isn't covered by these analyzers, use code_analyzer to generate custom code instead.
 
 Think step by step and choose the most promising approach. You can also suggest running multiple analyzers in sequence if that makes sense.
 """

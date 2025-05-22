@@ -13,6 +13,9 @@ import base64
 import binascii
 import struct
 import io
+import os
+import subprocess
+import tempfile
 from typing import Dict, List, Any, Optional, Tuple, Union, BinaryIO
 
 # Try to import optional dependencies
@@ -27,6 +30,12 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+try:
+    import binwalk
+    BINWALK_AVAILABLE = True
+except ImportError:
+    BINWALK_AVAILABLE = False
 
 # ---- Image Steganography Tools ----
 
@@ -494,6 +503,233 @@ def find_embedded_files(data: bytes) -> Dict[str, Any]:
 
     return result
 
+# ---- External Tool Integration ----
+
+def run_zsteg(data: bytes) -> Dict[str, Any]:
+    """
+    Run zsteg on image data to detect steganography.
+
+    Args:
+        data: Binary image data
+
+    Returns:
+        Dictionary with zsteg analysis results
+    """
+    result = {
+        "success": False,
+        "tool": "zsteg",
+        "findings": []
+    }
+
+    try:
+        # Check if the data is a PNG or BMP (zsteg only works with these formats)
+        is_png = data[:8] == b'\x89\x50\x4e\x47\x0d\x0a\x1a\x0a'
+        is_bmp = data[:2] == b'BM'
+
+        if not (is_png or is_bmp):
+            result["error"] = "zsteg only works with PNG and BMP files"
+            return result
+
+        # Create a temporary file to store the image
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png' if is_png else '.bmp') as temp_file:
+            temp_file.write(data)
+            temp_path = temp_file.name
+
+        try:
+            # Run zsteg command
+            cmd = ["zsteg", temp_path]
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = process.communicate(timeout=30)
+
+            if process.returncode != 0:
+                result["error"] = f"zsteg failed with error: {stderr.decode('utf-8', errors='ignore')}"
+                return result
+
+            # Parse zsteg output
+            output = stdout.decode('utf-8', errors='ignore')
+            lines = output.split('\n')
+
+            for line in lines:
+                if line.strip():
+                    # Parse the line to extract information
+                    if ":" in line:
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            key = parts[0].strip()
+                            value = parts[1].strip()
+                            result["findings"].append({
+                                "type": key,
+                                "content": value
+                            })
+
+            result["success"] = True
+            result["raw_output"] = output
+
+        finally:
+            # Clean up the temporary file
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+
+    except FileNotFoundError:
+        result["error"] = "zsteg command not found. Install with: gem install zsteg"
+    except Exception as e:
+        result["error"] = f"Error running zsteg: {str(e)}"
+
+    return result
+
+def run_binwalk(data: bytes) -> Dict[str, Any]:
+    """
+    Run binwalk on binary data to find embedded files and signatures.
+
+    Args:
+        data: Binary data to analyze
+
+    Returns:
+        Dictionary with binwalk analysis results
+    """
+    result = {
+        "success": False,
+        "tool": "binwalk",
+        "signatures": [],
+        "extracted_files": []
+    }
+
+    # First try to use the Python binwalk module if available
+    if BINWALK_AVAILABLE:
+        try:
+            # Create a temporary directory for extraction
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Create a temporary file for the binary data
+                with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                    temp_file.write(data)
+                    temp_path = temp_file.name
+
+                try:
+                    # Run signature scan
+                    signature_results = binwalk.scan(temp_path, signature=True, quiet=True)
+
+                    # Process signature results
+                    for module in signature_results:
+                        for entry in module.results:
+                            result["signatures"].append({
+                                "offset": entry.offset,
+                                "description": entry.description
+                            })
+
+                    # Run extraction
+                    extraction_results = binwalk.scan(temp_path, extract=True, quiet=True, directory=temp_dir)
+
+                    # Check if any files were extracted
+                    extracted_dir = os.path.join(temp_dir, "_" + os.path.basename(temp_path) + ".extracted")
+                    if os.path.exists(extracted_dir):
+                        for root, dirs, files in os.walk(extracted_dir):
+                            for file in files:
+                                file_path = os.path.join(root, file)
+                                rel_path = os.path.relpath(file_path, extracted_dir)
+
+                                # Read the extracted file
+                                with open(file_path, 'rb') as f:
+                                    file_data = f.read()
+
+                                result["extracted_files"].append({
+                                    "name": rel_path,
+                                    "size": len(file_data),
+                                    "data": file_data[:1024]  # Store first 1KB of data
+                                })
+
+                    result["success"] = True
+
+                finally:
+                    # Clean up the temporary file
+                    try:
+                        os.unlink(temp_path)
+                    except:
+                        pass
+
+        except Exception as e:
+            result["error"] = f"Error using binwalk module: {str(e)}"
+            # Fall back to command-line binwalk
+            result["fallback"] = "Falling back to command-line binwalk"
+
+    # If Python module failed or is not available, try command-line binwalk
+    if not result["success"]:
+        try:
+            # Create a temporary directory for extraction
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Create a temporary file for the binary data
+                with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                    temp_file.write(data)
+                    temp_path = temp_file.name
+
+                try:
+                    # Run binwalk signature scan
+                    cmd = ["binwalk", temp_path]
+                    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    stdout, stderr = process.communicate(timeout=30)
+
+                    if process.returncode != 0:
+                        result["error"] = f"binwalk failed with error: {stderr.decode('utf-8', errors='ignore')}"
+                    else:
+                        # Parse binwalk output
+                        output = stdout.decode('utf-8', errors='ignore')
+                        lines = output.split('\n')
+
+                        for line in lines:
+                            if line.strip() and not line.startswith("DECIMAL") and not line.startswith("-"):
+                                parts = line.split(None, 2)
+                                if len(parts) >= 3:
+                                    try:
+                                        offset = int(parts[0])
+                                        description = parts[2]
+                                        result["signatures"].append({
+                                            "offset": offset,
+                                            "description": description
+                                        })
+                                    except:
+                                        pass
+
+                        # Run binwalk extraction
+                        cmd = ["binwalk", "-e", "-C", temp_dir, temp_path]
+                        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        stdout, stderr = process.communicate(timeout=30)
+
+                        # Check if any files were extracted
+                        extracted_dir = os.path.join(temp_dir, "_" + os.path.basename(temp_path) + ".extracted")
+                        if os.path.exists(extracted_dir):
+                            for root, dirs, files in os.walk(extracted_dir):
+                                for file in files:
+                                    file_path = os.path.join(root, file)
+                                    rel_path = os.path.relpath(file_path, extracted_dir)
+
+                                    # Read the extracted file
+                                    with open(file_path, 'rb') as f:
+                                        file_data = f.read()
+
+                                    result["extracted_files"].append({
+                                        "name": rel_path,
+                                        "size": len(file_data),
+                                        "data": file_data[:1024]  # Store first 1KB of data
+                                    })
+
+                        result["success"] = True
+                        result["raw_output"] = output
+
+                finally:
+                    # Clean up the temporary file
+                    try:
+                        os.unlink(temp_path)
+                    except:
+                        pass
+
+        except FileNotFoundError:
+            result["error"] = "binwalk command not found. Install with: pip install python-binwalk"
+        except Exception as e:
+            result["error"] = f"Error running binwalk: {str(e)}"
+
+    return result
+
 # ---- Main Steganography Analysis Function ----
 
 def analyze_stego(data: bytes, file_type: str = None) -> Dict[str, Any]:
@@ -555,12 +791,22 @@ def analyze_stego(data: bytes, file_type: str = None) -> Dict[str, Any]:
             result["analysis_results"]["appended_data"] = extract_appended_data(data)
             result["analysis_results"]["embedded_files"] = find_embedded_files(data)
 
+            # Run zsteg on PNG and BMP files
+            if file_type in ["png", "bmp"]:
+                result["analysis_results"]["zsteg"] = run_zsteg(data)
+
+            # Run binwalk on all image types
+            result["analysis_results"]["binwalk"] = run_binwalk(data)
+
         elif file_type in ["wav", "mp3"]:
             # Audio steganography analysis
             if file_type == "wav":
                 result["analysis_results"]["spectrogram"] = analyze_audio_spectrogram(data)
 
             result["analysis_results"]["embedded_files"] = find_embedded_files(data)
+
+            # Run binwalk on audio files
+            result["analysis_results"]["binwalk"] = run_binwalk(data)
 
         elif file_type == "text":
             # Text steganography analysis
@@ -571,6 +817,9 @@ def analyze_stego(data: bytes, file_type: str = None) -> Dict[str, Any]:
         else:
             # Generic binary analysis
             result["analysis_results"]["embedded_files"] = find_embedded_files(data)
+
+            # Run binwalk on all binary files
+            result["analysis_results"]["binwalk"] = run_binwalk(data)
 
         result["success"] = True
 

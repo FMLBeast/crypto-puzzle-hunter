@@ -22,13 +22,20 @@ matplotlib>=3.8.0  # For visualizations
 tqdm>=4.66.0  # For progress bars 
 rich>=13.7.0  # For rich terminal output
 click>=8.1.7  # For CLI interface
+beautifulsoup4>=4.12.0  # For web scraping
 
 # Binary analysis
 pyelftools>=0.30  # For ELF file analysis
 pefile>=2023.2.7  # For PE file analysis
+
+# Steganography tools
+stegano>=0.11.0  # For steganography analysis
 
 # Development and testing
 pytest>=7.0.0
 black>=23.1.0
 isort>=5.12.0
 pylint>=3.0.0
+
+# Note: zsteg is a Ruby gem and needs to be installed separately with:
+# gem install zsteg

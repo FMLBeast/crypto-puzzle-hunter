@@ -48,7 +48,7 @@ class SolutionLogger:
 
         self.insights.append(insight)
 
-        # Print the insight in real-time with proper formatting
+        # Always print insights in real-time with proper formatting
         console.print()  # Ensure we start on a new line
         console.print(f"╭─ [bold cyan][{time_str}][/bold cyan] [bold green]{analyzer}[/bold green] ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮")
         console.print(f"│ {text}")
@@ -82,7 +82,7 @@ class SolutionLogger:
 
         self.transformations.append(transformation)
 
-        # Print the transformation in real-time with consistent formatting
+        # Always print transformations in real-time with consistent formatting
         console.print()  # Ensure we start on a new line
         console.print(f"╭─ [bold cyan][{time_str}][/bold cyan] [bold green]{analyzer}[/bold green] ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮")
         console.print(f"│ {name}")
@@ -101,7 +101,7 @@ class SolutionLogger:
         """
         self.solution = solution
 
-        # Print the solution in real-time with consistent formatting
+        # Always print the solution in real-time with consistent formatting
         console.print()  # Ensure we start on a new line
         console.print(f"╭─ [bold cyan]SOLUTION FOUND[/bold cyan] ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮")
         console.print(f"│ ")

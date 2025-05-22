@@ -14,6 +14,7 @@ import requests
 from typing import Dict, List, Tuple, Optional, Any, Union
 
 from core.state import State
+from core.steganography_tools import analyze_stego, run_zsteg, run_binwalk
 from analyzers.base import register_analyzer, analyzer_compatibility
 
 @register_analyzer("crypto_analyzer")
@@ -153,13 +154,148 @@ def analyze_crypto(state: State) -> State:
             if contract_analysis:
                 state.add_insight(f"Smart contract analysis: {contract_analysis}", analyzer="crypto_analyzer")
 
-    # If we have binary data, check for wallet files
+    # If we have binary data, perform additional analysis
     if state.binary_data:
+        # Check for wallet files
         state.add_insight("Checking binary data for wallet files...", analyzer="crypto_analyzer")
         binary_wallet_results = analyze_binary_for_wallets(state.binary_data)
         if binary_wallet_results:
             for wallet_type, wallet_info in binary_wallet_results:
                 state.add_insight(f"Found {wallet_type} wallet in binary data: {wallet_info}", analyzer="crypto_analyzer")
+
+        # Check if the binary data is an image
+        is_image = False
+        image_type = None
+
+        # Check common image signatures
+        if state.binary_data[:8] == b'\x89\x50\x4e\x47\x0d\x0a\x1a\x0a':
+            is_image = True
+            image_type = "png"
+        elif state.binary_data[:2] == b'\xff\xd8':
+            is_image = True
+            image_type = "jpeg"
+        elif state.binary_data[:3] == b'GIF':
+            is_image = True
+            image_type = "gif"
+        elif state.binary_data[:2] == b'BM':
+            is_image = True
+            image_type = "bmp"
+
+        if is_image:
+            state.add_insight(f"Binary data appears to be a {image_type.upper()} image, performing steganography analysis...", analyzer="crypto_analyzer")
+
+            # Run comprehensive steganography analysis
+            stego_results = analyze_stego(state.binary_data, file_type=image_type)
+
+            if stego_results["success"]:
+                # Check for LSB steganography results
+                if "lsb" in stego_results["analysis_results"] and stego_results["analysis_results"]["lsb"]["success"]:
+                    lsb_data = stego_results["analysis_results"]["lsb"]
+                    if "possible_text" in lsb_data and lsb_data["possible_text"]:
+                        state.add_insight(f"Found potential hidden text in LSB data: {lsb_data['possible_text'][:100]}...", analyzer="crypto_analyzer")
+                        state.add_transformation(
+                            name="LSB Steganography",
+                            description="Text extracted from least significant bits",
+                            input_data=f"{image_type.upper()} image",
+                            output_data=lsb_data['possible_text'],
+                            analyzer="crypto_analyzer"
+                        )
+
+                # Check for appended data
+                if "appended_data" in stego_results["analysis_results"] and stego_results["analysis_results"]["appended_data"]["has_appended_data"]:
+                    appended_data = stego_results["analysis_results"]["appended_data"]
+                    state.add_insight(f"Found data appended after the {image_type.upper()} file: {appended_data['appended_data_size']} bytes", analyzer="crypto_analyzer")
+
+                    if "appended_text" in appended_data:
+                        state.add_insight(f"Appended data as text: {appended_data['appended_text'][:100]}...", analyzer="crypto_analyzer")
+                        state.add_transformation(
+                            name="Appended Data",
+                            description=f"Data appended after {image_type.upper()} file",
+                            input_data=f"{image_type.upper()} image",
+                            output_data=appended_data['appended_text'],
+                            analyzer="crypto_analyzer"
+                        )
+
+                # Check for embedded files
+                if "embedded_files" in stego_results["analysis_results"] and stego_results["analysis_results"]["embedded_files"]["success"]:
+                    embedded_files = stego_results["analysis_results"]["embedded_files"]
+                    if embedded_files["embedded_files"]:
+                        state.add_insight(f"Found {len(embedded_files['embedded_files'])} potential embedded files in the image", analyzer="crypto_analyzer")
+
+                        for embedded_file in embedded_files["embedded_files"][:3]:  # Limit to first 3
+                            state.add_insight(f"Potential {embedded_file['file_type']} at offset {embedded_file['offset']}", analyzer="crypto_analyzer")
+
+                # Check for zsteg results (PNG and BMP only)
+                if image_type in ["png", "bmp"] and "zsteg" in stego_results["analysis_results"]:
+                    zsteg_results = stego_results["analysis_results"]["zsteg"]
+                    if zsteg_results["success"] and zsteg_results["findings"]:
+                        state.add_insight(f"zsteg found {len(zsteg_results['findings'])} potential hidden data in the image", analyzer="crypto_analyzer")
+
+                        for finding in zsteg_results["findings"][:5]:  # Limit to first 5
+                            state.add_insight(f"zsteg found: {finding['type']} - {finding['content'][:100]}", analyzer="crypto_analyzer")
+                            state.add_transformation(
+                                name=f"zsteg: {finding['type']}",
+                                description=f"Hidden data found by zsteg in {finding['type']}",
+                                input_data=f"{image_type.upper()} image",
+                                output_data=finding['content'],
+                                analyzer="crypto_analyzer"
+                            )
+                    elif "error" in zsteg_results:
+                        state.add_insight(f"zsteg analysis failed: {zsteg_results['error']}", analyzer="crypto_analyzer")
+
+                # Check for binwalk results
+                if "binwalk" in stego_results["analysis_results"]:
+                    binwalk_results = stego_results["analysis_results"]["binwalk"]
+                    if binwalk_results["success"]:
+                        if binwalk_results["signatures"]:
+                            state.add_insight(f"binwalk found {len(binwalk_results['signatures'])} file signatures in the image", analyzer="crypto_analyzer")
+
+                            for signature in binwalk_results["signatures"][:3]:  # Limit to first 3
+                                state.add_insight(f"binwalk signature at offset {signature['offset']}: {signature['description']}", analyzer="crypto_analyzer")
+
+                        if binwalk_results["extracted_files"]:
+                            state.add_insight(f"binwalk extracted {len(binwalk_results['extracted_files'])} files from the image", analyzer="crypto_analyzer")
+
+                            for extracted_file in binwalk_results["extracted_files"][:2]:  # Limit to first 2
+                                state.add_insight(f"binwalk extracted: {extracted_file['name']} ({extracted_file['size']} bytes)", analyzer="crypto_analyzer")
+                                state.add_transformation(
+                                    name=f"binwalk: {extracted_file['name']}",
+                                    description=f"File extracted by binwalk from image",
+                                    input_data=f"{image_type.upper()} image",
+                                    output_data=f"First 100 bytes (hex): {extracted_file['data'][:100].hex()}",
+                                    analyzer="crypto_analyzer"
+                                )
+                    elif "error" in binwalk_results:
+                        state.add_insight(f"binwalk analysis failed: {binwalk_results['error']}", analyzer="crypto_analyzer")
+            else:
+                if "error" in stego_results:
+                    state.add_insight(f"Steganography analysis failed: {stego_results['error']}", analyzer="crypto_analyzer")
+        else:
+            # For non-image binary data, still run binwalk
+            state.add_insight("Running binwalk on binary data to check for embedded files...", analyzer="crypto_analyzer")
+            binwalk_results = run_binwalk(state.binary_data)
+
+            if binwalk_results["success"]:
+                if binwalk_results["signatures"]:
+                    state.add_insight(f"binwalk found {len(binwalk_results['signatures'])} file signatures in the binary data", analyzer="crypto_analyzer")
+
+                    for signature in binwalk_results["signatures"][:3]:  # Limit to first 3
+                        state.add_insight(f"binwalk signature at offset {signature['offset']}: {signature['description']}", analyzer="crypto_analyzer")
+
+                if binwalk_results["extracted_files"]:
+                    state.add_insight(f"binwalk extracted {len(binwalk_results['extracted_files'])} files from the binary data", analyzer="crypto_analyzer")
+
+                    for extracted_file in binwalk_results["extracted_files"][:2]:  # Limit to first 2
+                        state.add_insight(f"binwalk extracted: {extracted_file['name']} ({extracted_file['size']} bytes)", analyzer="crypto_analyzer")
+                        state.add_transformation(
+                            name=f"binwalk: {extracted_file['name']}",
+                            description=f"File extracted by binwalk from binary data",
+                            input_data="Binary data",
+                            output_data=f"First 100 bytes (hex): {extracted_file['data'][:100].hex()}",
+                            analyzer="crypto_analyzer"
+                        )
+            elif "error" in binwalk_results:
+                state.add_insight(f"binwalk analysis failed: {binwalk_results['error']}", analyzer="crypto_analyzer")
 
     return state
 

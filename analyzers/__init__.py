@@ -15,7 +15,10 @@ _analyzer_modules = {
     'vision_analyzer': 'analyzers.vision_analyzer',
     'web_analyzer': 'analyzers.web_analyzer',
     'code_analyzer': 'analyzers.code_analyzer',
-    'crypto_analyzer': 'analyzers.crypto_analyzer'
+    'crypto_analyzer': 'analyzers.crypto_analyzer',
+    'blockchain_analyzer': 'analyzers.blockchain_analyzer',
+    'binwalk': 'analyzers.binwalk_analyzer',
+    'cryptographic_analyzer': 'analyzers.cryptographic_analyzer'
 }
 
 def _ensure_modules_loaded():

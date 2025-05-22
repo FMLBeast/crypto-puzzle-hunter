@@ -31,7 +31,7 @@ except ImportError:
 INFURA_ENDPOINT = f"https://mainnet.infura.io/v3/{config.ETHERSCAN_API_KEY}" if config.ETHERSCAN_API_KEY else None
 
 
-@register_analyzer("blockchain_analyze")
+@register_analyzer("blockchain_analyzer")
 def analyze_blockchain(state: State) -> State:
     """
     Main blockchain analyzer function that orchestrates blockchain analysis.

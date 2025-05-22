@@ -536,6 +536,20 @@ class CryptoAgent:
                     3. Attempt a direct solution
                     4. Try a completely different approach
 
+                    Available analyzers (ONLY use analyzers from this list):
+                    - text_analyzer: For analyzing text patterns and encodings
+                    - binary_analyzer: For analyzing binary data
+                    - image_analyzer: For analyzing images (steganography)
+                    - cipher_analyzer: For detecting and solving classical ciphers
+                    - encoding_analyzer: For detecting and decoding various encodings
+                    - blockchain_analyzer: For analyzing crypto addresses and data
+                    - crypto_analyzer: For analyzing cryptographic elements including hashes, keys, and signatures
+                    - code_analyzer: For generating and executing Python code to solve the puzzle
+                    - vision_analyzer: For analyzing images using computer vision techniques
+                    - web_analyzer: For analyzing web-related content and URLs
+
+                    IMPORTANT: Do NOT suggest analyzers that are not in the above list. If you need functionality that isn't covered by these analyzers, use code_analyzer to generate custom code instead.
+
                     Provide your decision in JSON format:
                     {{
                         "action": "code_analysis" or "specific_analyzer" or "direct_solution" or "new_approach",
@@ -683,6 +697,20 @@ class CryptoAgent:
                     1. Try code-based analysis
                     2. Try a specific analyzer with specific parameters
                     3. Attempt a direct solution
+
+                    Available analyzers (ONLY use analyzers from this list):
+                    - text_analyzer: For analyzing text patterns and encodings
+                    - binary_analyzer: For analyzing binary data
+                    - image_analyzer: For analyzing images (steganography)
+                    - cipher_analyzer: For detecting and solving classical ciphers
+                    - encoding_analyzer: For detecting and decoding various encodings
+                    - blockchain_analyzer: For analyzing crypto addresses and data
+                    - crypto_analyzer: For analyzing cryptographic elements including hashes, keys, and signatures
+                    - code_analyzer: For generating and executing Python code to solve the puzzle
+                    - vision_analyzer: For analyzing images using computer vision techniques
+                    - web_analyzer: For analyzing web-related content and URLs
+
+                    IMPORTANT: Do NOT suggest analyzers that are not in the above list. If you need functionality that isn't covered by these analyzers, use code_analyzer to generate custom code instead.
 
                     Provide your decision in JSON format:
                     {{
@@ -875,6 +903,20 @@ class CryptoAgent:
                             2. Try a specific analyzer with specific parameters
                             3. Attempt a direct solution
                             4. Combine insights from multiple analyzers
+
+                            Available analyzers (ONLY use analyzers from this list):
+                            - text_analyzer: For analyzing text patterns and encodings
+                            - binary_analyzer: For analyzing binary data
+                            - image_analyzer: For analyzing images (steganography)
+                            - cipher_analyzer: For detecting and solving classical ciphers
+                            - encoding_analyzer: For detecting and decoding various encodings
+                            - blockchain_analyzer: For analyzing crypto addresses and data
+                            - crypto_analyzer: For analyzing cryptographic elements including hashes, keys, and signatures
+                            - code_analyzer: For generating and executing Python code to solve the puzzle
+                            - vision_analyzer: For analyzing images using computer vision techniques
+                            - web_analyzer: For analyzing web-related content and URLs
+
+                            IMPORTANT: Do NOT suggest analyzers that are not in the above list. If you need functionality that isn't covered by these analyzers, use code_analyzer to generate custom code instead.
 
                             Provide your decision in JSON format:
                             {{

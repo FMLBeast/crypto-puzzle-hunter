@@ -103,20 +103,48 @@ class EnhancedStateSaver:
             stego_files = self._save_steganography_data(state, base_name)
             saved_files.update(stego_files)
 
+            # Log steganographic data in real-time
+            if stego_files:
+                solution_logger.log_insight(
+                    f"Generated {len(stego_files)} steganography files on-the-go",
+                    "state_saver"
+                )
+
             # 5. Save potential cryptographic keys
             update_progress("Analyzing potential keys")
             key_files = self._save_potential_keys(state, base_name)
             saved_files.update(key_files)
+
+            # Log potential keys in real-time
+            if key_files:
+                solution_logger.log_insight(
+                    f"Generated {len(key_files)} potential key files on-the-go",
+                    "state_saver"
+                )
 
             # 6. Save binary data extractions
             update_progress("Saving binary data")
             binary_files = self._save_binary_data(state, base_name)
             saved_files.update(binary_files)
 
+            # Log binary data in real-time
+            if binary_files:
+                solution_logger.log_insight(
+                    f"Generated {len(binary_files)} binary data files on-the-go",
+                    "state_saver"
+                )
+
             # 7. Save all transformations as separate files
             update_progress("Saving transformations")
             transform_files = self._save_transformations(state, base_name)
             saved_files.update(transform_files)
+
+            # Log transformations in real-time
+            if transform_files:
+                solution_logger.log_insight(
+                    f"Generated {len(transform_files)} transformation files on-the-go",
+                    "state_saver"
+                )
 
             # 8. Save execution log
             update_progress("Creating execution log")

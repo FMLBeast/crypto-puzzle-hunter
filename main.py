@@ -140,7 +140,7 @@ def print_state_details(state):
         console.print("[italic]No transformations yet.[/italic]")
 
 
-def process_all_files_in_folder(folder_path, agent, output_dir="./output", iterations=5, results_dir="./results",
+def process_all_files_in_folder(folder_path, agent, output_dir="./output", iterations=15, results_dir="./results",
                                 use_clues=False, verbose=False):
     """
     Process all files in a puzzle folder as a single puzzle.
@@ -340,7 +340,7 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
     return final_state
 
 
-def process_puzzle(puzzle_path, agent, output_dir="./output", iterations=5, results_dir="./results", use_clues=False,
+def process_puzzle(puzzle_path, agent, output_dir="./output", iterations=15, results_dir="./results", use_clues=False,
                    verbose=False):
     """
     Process a single puzzle file or folder.

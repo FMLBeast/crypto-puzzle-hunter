@@ -11,6 +11,7 @@ import struct
 from collections import Counter
 from core.state import State
 from analyzers.base import register_analyzer, analyzer_compatibility
+from core.steganography_tools import run_binwalk
 
 # File signatures for common file types
 FILE_SIGNATURES = {
@@ -59,53 +60,53 @@ FILE_SIGNATURES = {
 def analyze_binary(state: State) -> State:
     """
     Analyze binary data for file signatures, hidden data, and other patterns.
-    
+
     Args:
         state: Current puzzle state
-        
+
     Returns:
         Updated state
     """
     if not state.binary_data:
         return state
-    
+
     data = state.binary_data
-    
+
     # Add insight about starting analysis
     state.add_insight(
         f"Starting binary analysis of {len(data)} bytes",
         analyzer="binary_analyzer"
     )
-    
+
     # Identify file type
     identify_file_type(state, data)
-    
+
     # Check for embedded files
     check_for_embedded_files(state, data)
-    
+
     # Analyze entropy
     analyze_entropy(state, data)
-    
+
     # Check for hidden text
     check_for_hidden_text(state, data)
-    
+
     # Look for unusual patterns
     check_for_unusual_patterns(state, data)
-    
+
     # Check related files if any
     if state.related_files:
         state.add_insight(
             f"Checking {len(state.related_files)} related files for binary patterns",
             analyzer="binary_analyzer"
         )
-        
+
         for filename, file_info in state.related_files.items():
             binary_content = file_info["content"]
             state.add_insight(
                 f"Analyzing related binary file {filename} ({len(binary_content)} bytes)",
                 analyzer="binary_analyzer"
             )
-            
+
             # Identify file type of the related file
             file_type = identify_file_type_from_data(binary_content)
             if file_type:
@@ -113,19 +114,19 @@ def analyze_binary(state: State) -> State:
                     f"Related file {filename} appears to be a {file_type}",
                     analyzer="binary_analyzer"
                 )
-    
+
     return state
 
 def identify_file_type(state: State, data: bytes) -> None:
     """
     Identify the file type based on signatures.
-    
+
     Args:
         state: Current puzzle state
         data: Binary data to analyze
     """
     file_type = identify_file_type_from_data(data)
-    
+
     if file_type:
         state.add_insight(
             f"File appears to be a {file_type}",
@@ -136,7 +137,7 @@ def identify_file_type(state: State, data: bytes) -> None:
             "No recognized file signature detected",
             analyzer="binary_analyzer"
         )
-        
+
         # Check if it could be text
         printable_ratio = sum(1 for b in data if chr(b).isprintable()) / len(data) if data else 0
         if printable_ratio > 0.8:
@@ -144,7 +145,7 @@ def identify_file_type(state: State, data: bytes) -> None:
                 "Binary data has high ratio of printable characters, may contain text",
                 analyzer="binary_analyzer"
             )
-            
+
             # Add transformation to show the text
             try:
                 text = data.decode('utf-8', errors='replace')
@@ -164,10 +165,10 @@ def identify_file_type(state: State, data: bytes) -> None:
 def identify_file_type_from_data(data: bytes) -> str:
     """
     Identify file type from binary data.
-    
+
     Args:
         data: Binary data to analyze
-        
+
     Returns:
         String describing the identified file type, or None if not identified
     """
@@ -179,39 +180,85 @@ def identify_file_type_from_data(data: bytes) -> str:
 def check_for_embedded_files(state: State, data: bytes) -> None:
     """
     Check for embedded files within the binary data.
-    
+
     Args:
         state: Current puzzle state
         data: Binary data to analyze
     """
-    # Scan for file signatures within the data (not just at the beginning)
+    # First use binwalk for advanced embedded file detection
+    binwalk_results = run_binwalk(data)
+
+    if binwalk_results["success"]:
+        # Add insights from binwalk signatures
+        if binwalk_results["signatures"]:
+            state.add_insight(
+                f"Binwalk found {len(binwalk_results['signatures'])} file signatures",
+                analyzer="binary_analyzer"
+            )
+
+            # Add the first few signatures as insights
+            for signature in binwalk_results["signatures"][:5]:  # Limit to first 5
+                state.add_insight(
+                    f"Binwalk signature at offset {signature['offset']} (0x{signature['offset']:X}): {signature['description']}",
+                    analyzer="binary_analyzer"
+                )
+
+        # Add insights from extracted files
+        if binwalk_results["extracted_files"]:
+            state.add_insight(
+                f"Binwalk extracted {len(binwalk_results['extracted_files'])} embedded files",
+                analyzer="binary_analyzer"
+            )
+
+            # Add the first few extracted files as insights
+            for extracted_file in binwalk_results["extracted_files"][:3]:  # Limit to first 3
+                state.add_insight(
+                    f"Binwalk extracted file: {extracted_file['name']} ({extracted_file['size']} bytes)",
+                    analyzer="binary_analyzer"
+                )
+
+                # Add transformation for the extracted file
+                state.add_transformation(
+                    name=f"Extracted File: {extracted_file['name']}",
+                    description=f"File extracted by binwalk from binary data",
+                    input_data=f"Binary data at offset {extracted_file.get('offset', 'unknown')}",
+                    output_data=f"First 1KB of extracted file (hex): {extracted_file['data'].hex()[:1000]}...",
+                    analyzer="binary_analyzer"
+                )
+    elif "error" in binwalk_results:
+        state.add_insight(
+            f"Binwalk analysis failed: {binwalk_results['error']}",
+            analyzer="binary_analyzer"
+        )
+
+    # Also use our basic signature detection as a fallback
     embedded_files = []
-    
+
     for signature, file_type in FILE_SIGNATURES.items():
         positions = []
         start_pos = 0
-        
+
         while True:
             pos = data.find(signature, start_pos)
             if pos == -1:
                 break
             positions.append(pos)
             start_pos = pos + 1
-        
+
         if positions:
             embedded_files.append((file_type, positions))
-    
+
     if embedded_files:
         # Filter out the signature at the beginning
         embedded_files = [(ftype, pos) for ftype, positions in embedded_files 
                          for pos in positions if pos > 0]
-        
+
         if embedded_files:
             state.add_insight(
-                f"Found {len(embedded_files)} potential embedded files or signatures",
+                f"Basic signature scan found {len(embedded_files)} potential embedded files or signatures",
                 analyzer="binary_analyzer"
             )
-            
+
             for file_type, position in embedded_files[:5]:  # Limit to first 5
                 state.add_insight(
                     f"Potential {file_type} at offset {position} (0x{position:X})",
@@ -221,32 +268,32 @@ def check_for_embedded_files(state: State, data: bytes) -> None:
 def analyze_entropy(state: State, data: bytes) -> None:
     """
     Analyze the entropy of the binary data.
-    
+
     Args:
         state: Current puzzle state
         data: Binary data to analyze
     """
     import math
-    
+
     # Count byte frequencies
     byte_counts = Counter(data)
     total_bytes = len(data)
-    
+
     # Calculate Shannon entropy
     entropy = 0
     for byte_val, count in byte_counts.items():
         prob = count / total_bytes
         entropy -= prob * math.log2(prob)
-    
+
     # Interpret entropy level
     max_entropy = 8  # Maximum entropy for a byte (8 bits)
     entropy_ratio = entropy / max_entropy
-    
+
     state.add_insight(
         f"Binary entropy: {entropy:.2f} bits ({entropy_ratio:.1%} of maximum)",
         analyzer="binary_analyzer"
     )
-    
+
     if entropy_ratio > 0.9:
         state.add_insight(
             "Very high entropy suggests encryption, compression, or random data",
@@ -262,50 +309,50 @@ def analyze_entropy(state: State, data: bytes) -> None:
             "Low entropy suggests repetitive patterns or sparse data",
             analyzer="binary_analyzer"
         )
-    
+
     # Analyze entropy distribution across the file
     if len(data) > 1000:
         # Analyze entropy in 1KB chunks
         chunk_size = 1024
         chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
-        
+
         chunk_entropies = []
         for i, chunk in enumerate(chunks):
             # Skip empty chunks
             if not chunk:
                 continue
-            
+
             # Calculate entropy for this chunk
             chunk_byte_counts = Counter(chunk)
             chunk_entropy = 0
             for byte_val, count in chunk_byte_counts.items():
                 prob = count / len(chunk)
                 chunk_entropy -= prob * math.log2(prob)
-            
+
             chunk_entropies.append((i, chunk_entropy))
-        
+
         # Look for unusual entropy changes
         significant_changes = []
         for i in range(1, len(chunk_entropies)):
             prev_entropy = chunk_entropies[i-1][1]
             curr_entropy = chunk_entropies[i][1]
             change = abs(curr_entropy - prev_entropy)
-            
+
             if change > 2.0:  # Significant entropy change
                 significant_changes.append((chunk_entropies[i][0], change))
-        
+
         if significant_changes:
             first_change = significant_changes[0]
             state.add_insight(
                 f"Significant entropy change at offset {first_change[0] * chunk_size} (0x{first_change[0] * chunk_size:X})",
                 analyzer="binary_analyzer"
             )
-            
+
             # Add transformation to show entropy distribution
             output = "Chunk Offset, Entropy\n"
             for chunk_idx, entropy in chunk_entropies:
                 output += f"{chunk_idx * chunk_size} (0x{chunk_idx * chunk_size:X}), {entropy:.2f}\n"
-            
+
             state.add_transformation(
                 name="Entropy Distribution",
                 description="Distribution of entropy across the file in 1KB chunks",
@@ -317,20 +364,20 @@ def analyze_entropy(state: State, data: bytes) -> None:
 def check_for_hidden_text(state: State, data: bytes) -> None:
     """
     Check for hidden text within the binary data.
-    
+
     Args:
         state: Current puzzle state
         data: Binary data to analyze
     """
     # Look for ASCII strings
     ascii_strings = find_strings(data, min_length=4)
-    
+
     if ascii_strings:
         state.add_insight(
             f"Found {len(ascii_strings)} ASCII strings in the binary data",
             analyzer="binary_analyzer"
         )
-        
+
         # Add the first few strings as insights
         for string, offset in ascii_strings[:5]:
             if any(c.isalnum() for c in string):  # Only show strings with alphanumeric chars
@@ -338,12 +385,12 @@ def check_for_hidden_text(state: State, data: bytes) -> None:
                     f"ASCII string at offset {offset} (0x{offset:X}): {string}",
                     analyzer="binary_analyzer"
                 )
-        
+
         # Add a transformation with all strings
         output = "Offset, String\n"
         for string, offset in ascii_strings:
             output += f"{offset} (0x{offset:X}), {string}\n"
-        
+
         state.add_transformation(
             name="ASCII Strings",
             description="ASCII strings extracted from binary data",
@@ -351,13 +398,13 @@ def check_for_hidden_text(state: State, data: bytes) -> None:
             output_data=output[:1000] + "..." if len(output) > 1000 else output,
             analyzer="binary_analyzer"
         )
-    
+
     # Look for Unicode strings (UTF-16)
     try:
         # Check for UTF-16 BOM
         if (len(data) >= 2 and data[:2] in (b'\xff\xfe', b'\xfe\xff')) or \
            (b'\x00' in data and b'\x00\x00\x00' not in data):
-            
+
             # Try different UTF-16 variants
             for encoding in ('utf-16', 'utf-16-le', 'utf-16-be'):
                 try:
@@ -369,7 +416,7 @@ def check_for_hidden_text(state: State, data: bytes) -> None:
                             f"Data may contain text encoded in {encoding.upper()}",
                             analyzer="binary_analyzer"
                         )
-                        
+
                         # Add transformation for the UTF-16 text
                         state.add_transformation(
                             name=f"{encoding.upper()} Text",
@@ -388,7 +435,7 @@ def check_for_hidden_text(state: State, data: bytes) -> None:
 def check_for_unusual_patterns(state: State, data: bytes) -> None:
     """
     Check for unusual patterns in the binary data.
-    
+
     Args:
         state: Current puzzle state
         data: Binary data to analyze
@@ -400,7 +447,7 @@ def check_for_unusual_patterns(state: State, data: bytes) -> None:
             f"Found repeating pattern of length {len(repeating)} bytes",
             analyzer="binary_analyzer"
         )
-        
+
         # Add transformation to show the pattern
         state.add_transformation(
             name="Repeating Pattern",
@@ -409,7 +456,7 @@ def check_for_unusual_patterns(state: State, data: bytes) -> None:
             output_data=repeating.hex(),
             analyzer="binary_analyzer"
         )
-    
+
     # Check for XOR obfuscation
     xor_key = detect_xor(data)
     if xor_key is not None:
@@ -417,7 +464,7 @@ def check_for_unusual_patterns(state: State, data: bytes) -> None:
             f"Data may be XOR encoded with byte 0x{xor_key:02X}",
             analyzer="binary_analyzer"
         )
-        
+
         # Add transformation to show the first bytes of the XORed data
         try:
             xored_data = bytes([b ^ xor_key for b in data[:100]])
