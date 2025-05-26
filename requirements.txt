@@ -1,46 +1,49 @@
-# Core dependencies
-langchain>=0.1.0  # Latest version
-langchain-core>=0.1.0
-langchain-community>=0.1.0
-langchain-anthropic>=0.1.0  # For Claude integration
-langchain-openai>=0.1.0  # For OpenAI models
-pydantic>=2.5.0  # For data validation
-python-dotenv>=1.0.0  # For environment variables
+# Enhanced Crypto Hunter Requirements
+# Install with: pip install -r requirements_enhanced.txt
 
-# Cryptography and analysis
-cryptography>=42.0.0  # For cryptographic operations
-stegano>=0.11.0  # For steganography analysis
-pillow>=10.2.0  # For image processing
-pycryptodome>=3.19.0  # Additional cryptographic algorithms
-eth-hash>=0.5.2  # For Ethereum hashing
-eth-utils>=2.3.0  # For Ethereum utilities
-web3>=6.12.0  # For blockchain interactions
+# Core dependencies (existing)
+anthropic>=0.7.0
+openai>=1.0.0
+langchain>=0.1.0
+langchain-anthropic>=0.1.0
+langchain-openai>=0.1.0
+langchain-community>=0.0.20
+python-dotenv>=1.0.0
 
-# Utilities
-numpy>=1.26.0
-matplotlib>=3.8.0  # For visualizations
-tqdm>=4.66.0  # For progress bars 
-rich>=13.7.0  # For rich terminal output
-click>=8.1.7  # For CLI interface
-beautifulsoup4>=4.12.0  # For web scraping
+# Image processing (existing)
+Pillow>=10.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
 
-# Binary analysis
-pyelftools>=0.30  # For ELF file analysis
-pefile>=2023.2.7  # For PE file analysis
+# Crypto and blockchain (existing)
+cryptography>=41.0.0
+eth-utils>=2.3.0
+web3>=6.11.0
+eth-keys>=0.4.0
+requests>=2.31.0
 
-# Steganography tools
-stegano>=0.11.0  # For steganography analysis
+# Text processing (existing)
+beautifulsoup4>=4.12.0
+html5lib>=1.1
+
+# Enhanced system UI and display
+rich>=13.0.0
+click>=8.1.0
+
+# Data validation and serialization
+pydantic>=2.0.0
+
+# Scientific computing
+scipy>=1.11.0
+pandas>=2.0.0
+
+# Optional dependencies for advanced features
+matplotlib>=3.7.0; extra == "visualization"
+plotly>=5.17.0; extra == "visualization"
+fastapi>=0.104.0; extra == "api"
+uvicorn>=0.24.0; extra == "api"
 
 # Development and testing
-pytest>=7.0.0
-black>=23.1.0
-isort>=5.12.0
-pylint>=3.0.0
-
-# Note: zsteg is a Ruby gem and needs to be installed separately with:
-# gem install zsteg
-
-requests~=2.32.3
-binwalk~=2.3.3  # Version 2.3.3+ required for binwalk.core module
-opencv-python~=4.11.0.86
-eth-keys~=0.7.0
+pytest>=7.4.0; extra == "dev"
+black>=23.9.0; extra == "dev"
+mypy>=1.6.0; extra == "dev"

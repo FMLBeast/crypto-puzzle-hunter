@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """
 Crypto Hunter - The Ultimate Cryptographic Puzzle Solver
 
@@ -20,982 +19,591 @@ from core.state import State
 from core.agent import CryptoAgent
 from core.utils import browse_puzzles, get_puzzle_info, setup_logging, load_clues, load_patterns
 from core.logger import solution_logger
-
-console = Console()
+from ui.interactive import start_interactive_session
+from core.enhanced_state_saver import EnhancedStateSaver
+import re
+import time
+from datetime import datetime
 
 
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Crypto Hunter - Cryptographic Puzzle Solver")
-    parser.add_argument("--puzzle-file", type=str, help="Path to the puzzle file")
-    parser.add_argument("--output-dir", type=str, default="./output", help="Directory to store output")
-    parser.add_argument("--results-dir", type=str, default="./results", help="Directory to store results")
-    parser.add_argument("--browse-puzzles", action="store_true", help="Browse the puzzle collection")
-    parser.add_argument("--puzzle-dir", type=str, default="./puzzles", help="Directory containing puzzles")
-    parser.add_argument("--use-clues", action="store_true", help="Use available clues for the puzzle")
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("puzzle", nargs="?", help="Path to puzzle file or directory")
+    parser.add_argument("--provider", choices=["anthropic", "openai", "huggingface", "local"],
+                        default="openai", help="LLM provider to use")
+    parser.add_argument("--api-key", help="API key for the LLM provider")
+    parser.add_argument("--model", help="Specific model to use")
+    parser.add_argument("--iterations", type=int, default=10, help="Maximum analysis iterations")
+    parser.add_argument("--output-dir", default="output", help="Output directory")
+    parser.add_argument("--results-dir", default="results", help="Results directory")
+    parser.add_argument("--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--interactive", action="store_true", help="Run in interactive mode")
-    parser.add_argument("--iterations", type=int, default=15, help="Maximum number of analysis iterations")
-    parser.add_argument("--provider", type=str, default="anthropic",
-                        choices=["anthropic", "openai", "huggingface", "local"],
-                        help="LLM provider to use")
-    parser.add_argument("--model", type=str, help="Specific model to use with provider")
-    parser.add_argument("--api-key", type=str, help="API key for the LLM provider")
-    parser.add_argument("--analyzer", type=str, help="Use a specific analyzer")
-    parser.add_argument("--last-results", action="store_true", help="Read the last run results")
+    parser.add_argument("--browse", action="store_true", help="Browse puzzle collection")
+    parser.add_argument("--no-clues", action="store_true", help="Don't use clues")
+    parser.add_argument("--last-results", action="store_true", help="Show last results")
 
     return parser.parse_args()
 
 
 def display_welcome():
     """Display the welcome message."""
-    console.print(Panel.fit(
-        "[bold cyan]Crypto Hunter v1.0.0[/bold cyan]\n"
-        "[bold white]The Ultimate Cryptographic Puzzle Solver[/bold white]",
-        box=box.DOUBLE,
-        padding=(1, 10)
-    ))
-    console.print("\nWelcome to Crypto Hunter!")
+    console = Console()
+    console.print(Panel.fit("🔐 Crypto Hunter - AI-Powered Puzzle Solver 🔐", style="bold blue"))
 
 
 def setup_environment(args):
     """Set up the environment for the application."""
-    # Create output and results directories if they don't exist
+    # Create directories
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(args.results_dir, exist_ok=True)
 
     # Setup logging
     setup_logging(args.verbose)
 
-    # Initialize solution logger with verbose flag
-    global solution_logger
-    solution_logger.__init__(verbose=args.verbose)
 
-
-def interactive_menu():
-    """Display the interactive menu."""
-    console.print("Please select how you would like to proceed:")
-    console.print("  1. Browse puzzle collection")
-    console.print("  2. Interactive mode")
-    console.print("  3. Exit")
-
-    choice = Prompt.ask("Select an option [1/2/3]", choices=["1", "2", "3"], default="1")
-
-    if choice == "1":
-        return "browse"
-    elif choice == "2":
-        return "interactive"
-    else:
-        return "exit"
-
-
-def select_provider_interactively():
-    """Allow user to select an LLM provider."""
-    console.print("\n[bold]Available LLM Providers:[/bold]")
-    console.print("  1. Anthropic Claude (requires API key)")
-    console.print("  2. OpenAI (requires API key)")
-    console.print("  3. Hugging Face (requires API key)")
-    console.print("  4. Local fallback mode (no API needed)")
-
-    choice = Prompt.ask("Select a provider", choices=["1", "2", "3", "4"], default="1")
-
-    providers = {
-        "1": "anthropic",
-        "2": "openai",
-        "3": "huggingface",
-        "4": "local"
-    }
-
-    provider = providers[choice]
-
-    # Ask for API key if needed
-    api_key = None
-    if provider != "local":
-        env_var = f"{provider.upper()}_API_KEY"
-        if os.environ.get(env_var):
-            use_env = Prompt.ask(f"Use {env_var} from environment?", choices=["y", "n"], default="y")
-            if use_env.lower() == "n":
-                api_key = Prompt.ask("Enter API key", password=True)
-        else:
-            api_key = Prompt.ask("Enter API key", password=True)
-
-    return provider, api_key
-
-
-def print_state_details(state):
-    """Print detailed insights and transformations from the state."""
-    console.print("\n[bold]Current Insights:[/bold]")
-    if state.insights:
-        for i, insight in enumerate(state.insights, 1):
-            console.print(f"{i}. [{insight.get('time', '')}] {insight.get('analyzer', '')}: {insight.get('text', '')}")
-    else:
-        console.print("[italic]No insights yet.[/italic]")
-
-    console.print("\n[bold]Current Transformations:[/bold]")
-    if state.transformations:
-        for i, transform in enumerate(state.transformations, 1):
-            console.print(f"{i}. [{transform.get('name', 'Transformation')}] {transform.get('description', '')}")
-            console.print(f"   Input: {transform.get('input_data', '')[:100]}...")
-            console.print(f"   Output: {transform.get('output_data', '')[:100]}...")
-    else:
-        console.print("[italic]No transformations yet.[/italic]")
-
-
-def process_all_files_in_folder(folder_path, agent, output_dir="./output", iterations=15, results_dir="./results",
-                                use_clues=False, verbose=False):
+def process_puzzle_with_incremental_output(puzzle_path, agent, output_dir, iterations, results_dir, use_clues, verbose):
     """
-    Process all files in a puzzle folder as a single puzzle.
-
-    Args:
-        folder_path: Path to the puzzle folder
-        agent: CryptoAgent instance for analysis
-        output_dir: Directory to store output files
-        iterations: Maximum number of iterations for the agent
-        results_dir: Directory to store results
-        use_clues: Whether to use available clues
-        verbose: Whether to print detailed reasoning
-
-    Returns:
-        Final state of the puzzle analysis
+    Process a puzzle with incremental output and robust error handling.
     """
-    # Check if we have a previous state to resume from
+    console = Console()
+
     try:
-        from core.enhanced_state_saver import enhanced_saver
-        previous_state = enhanced_saver.load_state(str(folder_path))
-
-        if previous_state:
-            console.print(f"[bold green]Found previous progress for {folder_path}. Resuming...[/bold green]")
-            state = previous_state
-        else:
-            # Create new state
-            state = State()
-    except Exception as e:
-        console.print(f"[yellow]Error loading previous state: {e}. Starting fresh.[/yellow]")
-        # Create new state
+        # Initialize components
+        saver = EnhancedStateSaver(output_dir, results_dir)
         state = State()
 
-    # Load all files in the folder
-    folder_path = Path(folder_path)
-    files = list(folder_path.glob("*"))
-    if not files:
-        console.print(f"[bold red]No files found in {folder_path}[/bold red]")
-        return None
+        # Load puzzle
+        console.print(f"📁 Loading puzzle: {puzzle_path}")
+        state.set_puzzle_file(puzzle_path)
 
-    # Check for description.txt file
-    description_file = folder_path / "description.txt"
-    description_content = None
-    description_url = None
-
-    if description_file.exists() and description_file.is_file():
-        try:
-            with open(description_file, "r", encoding="utf-8") as f:
-                description_content = f.read()
-
-            # Check if there's a URL in the description
-            import re
-            url_pattern = re.compile(r'https?://\S+')
-            url_match = url_pattern.search(description_content)
-            if url_match:
-                description_url = url_match.group(0)
-
-            console.print(f"[bold green]Found description.txt file for this puzzle![/bold green]")
-            console.print(Panel.fit(
-                description_content,
-                title="Puzzle Description",
-                border_style="green"
-            ))
-
-            if description_url:
-                console.print(f"[bold cyan]Puzzle URL: {description_url}[/bold cyan]")
-        except Exception as e:
-            console.print(f"[bold red]Error reading description.txt: {e}[/bold red]")
-
-    # Add all files to the state
-    console.print(f"[bold]Loading all files from {folder_path} as part of the puzzle:[/bold]")
-
-    for file_path in files:
-        if file_path.is_file():
-            console.print(f"  - {file_path.name} ({file_path.stat().st_size} bytes)")
-
-            # Add all files to the state with their paths
-            with open(file_path, "rb") as f:
-                content = f.read()
-
-            # Add file content to the state
-            state.add_related_file(file_path.name, content)
-
-    # Use the first file as the main puzzle file if none is set
-    if not state.puzzle_file and files:
-        first_file = files[0]
-        if first_file.is_file():
-            # Fix: Pass the full path, not just the name
-            state.set_puzzle_file(str(first_file))
-
-            # For binary files, we'll need to handle differently
-            if state.is_binary():
-                state.set_binary_data(state.related_files[first_file.name]["content"])
-            else:
-                state.set_puzzle_text(state.related_files[first_file.name]["content"].decode("utf-8", errors="replace"))
-
-    # Check for binary image files among the related files
-    for filename, file_info in state.related_files.items():
-        file_ext = os.path.splitext(filename)[1].lower()
-        if file_ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']:
-            console.print(f"[bold]Found image file: {filename}[/bold]")
-            # Set binary data for image files to enable image analyzers
-            if "content" in file_info:
-                state.set_binary_data(file_info["content"])
-                break
-            else:
-                # Try to load the file from disk
-                try:
-                    file_path = os.path.join(folder_path, filename)
-                    if os.path.exists(file_path):
-                        with open(file_path, "rb") as f:
-                            content = f.read()
-                            # Update the file_info with the content
-                            file_info["content"] = content
-                            state.set_binary_data(content)
-                            console.print(f"[green]Loaded content for {filename} from disk[/green]")
-                            break
-                    else:
-                        # Try to load from output directory
-                        output_file_path = os.path.join("output", filename)
-                        if os.path.exists(output_file_path):
-                            with open(output_file_path, "rb") as f:
-                                content = f.read()
-                                # Update the file_info with the content
-                                file_info["content"] = content
-                                state.set_binary_data(content)
-                                console.print(f"[green]Loaded content for {filename} from output directory[/green]")
-                                break
-                        else:
-                            console.print(f"[yellow]Warning: Could not find file {filename} on disk[/yellow]")
-                except Exception as e:
-                    console.print(f"[red]Error loading file {filename}: {e}[/red]")
-
-    # Check for clues if enabled
-    if use_clues:
-        console.print("\n[bold]Checking for clues...[/bold]")
-        clues = load_clues(folder_path)
-
-        if clues:
-            console.print(f"[green]Found {len(clues)} clues![/green]")
-
-            for i, clue in enumerate(clues, 1):
-                console.print(f"[bold]Clue {i}:[/bold] {clue['file']}")
-                if not clue.get('binary', False):
-                    state.add_clue(clue['text'], clue['file'])
-                else:
-                    state.add_clue(f"Binary clue file: {clue['file']}", clue['file'])
-                    # Set binary data for binary clues to enable binary analyzers
-                    if 'data' in clue:
-                        print(f"Setting binary data from clue: {clue['file']} ({len(clue['data'])} bytes)")
-                        state.set_binary_data(clue['data'])
-                    else:
-                        print(f"Warning: Binary clue {clue['file']} has no 'data' key")
-                        # Try to load the file directly
-                        try:
-                            with open(clue['file'], 'rb') as f:
-                                binary_data = f.read()
-                                print(f"Loaded binary data directly: {len(binary_data)} bytes")
-                                state.set_binary_data(binary_data)
-                        except Exception as e:
-                            print(f"Error loading binary data directly: {e}")
-        else:
-            console.print("[yellow]No clues found.[/yellow]")
-
-    # Load patterns from similar puzzles
-    console.print("\n[bold]Loading patterns from similar puzzles...[/bold]")
-    patterns = load_patterns(folder_path)
-
-    if patterns:
-        console.print(f"[green]Found {len(patterns)} patterns![/green]")
-
-        for i, pattern in enumerate(patterns, 1):
-            console.print(f"[bold]Pattern {i}:[/bold] {pattern['file']} [{pattern['category']}]")
-            state.add_pattern(pattern['text'], pattern['file'], pattern['category'])
-    else:
-        console.print("[yellow]No patterns found.[/yellow]")
-
-    # Show folder contents summary
-    console.print("\n[bold]Puzzle Folder Summary:[/bold]")
-    folder_table = Table(show_header=True, header_style="bold magenta")
-    folder_table.add_column("File")
-    folder_table.add_column("Size")
-    folder_table.add_column("Type")
-
-    for file_path in files:
-        if file_path.is_file():
-            file_type = "Text" if not state.is_binary_file(file_path) else "Binary"
-            folder_table.add_row(
-                file_path.name,
-                f"{file_path.stat().st_size} bytes",
-                file_type
-            )
-
-    console.print(folder_table)
-    console.print("\n[bold cyan]Analyzing all files as part of a single puzzle...[/bold cyan]")
-
-    # Debug before analysis
-    if verbose:
-        console.print("[blue]Starting analysis with LLM agent...[/blue]")
-
-    # Run the analysis once with full iterations
-    final_state = agent.analyze(state, max_iterations=iterations)
-
-    if verbose:
-        console.print(f"\n[bold]Analysis completed after {iterations} iterations.[/bold]")
-        print_state_details(final_state)
-
-    # Save results
-    # Save comprehensive results using enhanced saver
-    try:
-        from core.enhanced_state_saver import enhanced_saver
-        saved_files = enhanced_saver.save_comprehensive_results(final_state, str(folder_path))
-
-        console.print(f"\n[bold green]Results saved successfully![/bold green]")
-        console.print(f"Generated {len(saved_files)} output files:")
-
-        # Show key files to user
-        key_files = ["summary", "html_report", "potential_keys_txt", "compressed_archive"]
-        for key_file in key_files:
-            if key_file in saved_files:
-                console.print(f"  [cyan]{key_file}:[/cyan] {saved_files[key_file]}")
-
-        if "html_report" in saved_files:
-            console.print(
-                f"\n[bold blue]💡 Tip:[/bold blue] Open the HTML report for a comprehensive view: {saved_files['html_report']}")
-
-    except Exception as save_error:
-        console.print(f"[bold red]Warning: Enhanced save failed, using basic save: {save_error}[/bold red]")
-        # Fallback to basic save
-        result_path = os.path.join(results_dir, f"{folder_path.name}_results.json")
-        with open(result_path, "w") as f:
-            json.dump({
-                "status": "completed",
-                "solution": final_state.solution,
-                "insights": final_state.insights,
-                "transformations": final_state.transformations
-            }, f, indent=2)
-
-    return final_state
-
-
-def process_puzzle(puzzle_path, agent, output_dir="./output", iterations=15, results_dir="./results", use_clues=False,
-                   verbose=False):
-    """
-    Process a single puzzle file or folder.
-
-    Args:
-        puzzle_path: Path to the puzzle file or folder
-        agent: CryptoAgent instance
-        output_dir: Directory to store output files
-        iterations: Maximum number of analysis iterations
-        results_dir: Directory to store results
-        use_clues: Whether to use available clues
-        verbose: Whether to print detailed reasoning
-
-    Returns:
-        Exit code (0 for success, non-zero for failure)
-    """
-    path = Path(puzzle_path)
-
-    # Check if the path is a directory
-    if path.is_dir():
-        console.print(f"[bold]Processing puzzle folder: {path}[/bold]")
-        final_state = process_all_files_in_folder(
-            path, agent, output_dir, iterations, results_dir, use_clues, verbose
-        )
-    else:
-        # Single file mode - load the file but also check if there are other files in the same directory
-        console.print(f"[bold]Processing puzzle file: {path}[/bold]")
-
-        # Check if there are other files in the same directory
-        parent_dir = path.parent
-        other_files = [f for f in parent_dir.glob("*") if f != path and f.is_file()]
-
-        if other_files:
-            console.print("[yellow]Note: Other files found in the same directory.[/yellow]")
-            console.print("[yellow]These might be related to the puzzle. Consider using the folder mode.[/yellow]")
-
-            process_all = Prompt.ask(
-                "Process all files in the directory as one puzzle?",
-                choices=["y", "n"],
-                default="y"
-            )
-
-            if process_all.lower() == "y":
-                final_state = process_all_files_in_folder(
-                    parent_dir, agent, output_dir, iterations, results_dir, use_clues, verbose
-                )
-                return 0 if final_state and final_state.solution else 1
-
-        # Process just the single file
-        with open(path, "rb") as f:
-            content = f.read()
-
-        # Check if we have a previous state to resume from
-        try:
-            from core.enhanced_state_saver import enhanced_saver
-            previous_state = enhanced_saver.load_state(str(path))
-
-            if previous_state:
-                console.print(f"[bold green]Found previous progress for {path.name}. Resuming...[/bold green]")
-                state = previous_state
-            else:
-                # Create new state
-                state = State(puzzle_file=path.name)
-        except Exception as e:
-            console.print(f"[yellow]Error loading previous state: {e}. Starting fresh.[/yellow]")
-            # Create new state
-            state = State(puzzle_file=path.name)
-
-        # Set content based on file type
-        if state.is_binary():
-            state.set_binary_data(content)
-            # Check if it's an image file
-            file_ext = os.path.splitext(path.name)[1].lower()
-            if file_ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']:
-                console.print(f"[bold]Processing image file: {path.name}[/bold]")
-        else:
-            state.set_puzzle_text(content.decode("utf-8", errors="replace"))
-
-        # Check for clues if enabled
+        # Load clues and patterns
         if use_clues:
-            console.print("\n[bold]Checking for clues...[/bold]")
-            clues = load_clues(path)
+            try:
+                clues = load_clues(puzzle_path)
+                for clue in clues:
+                    state.add_clue(clue['text'], clue['file'])
+                if clues:
+                    console.print(f"💡 Loaded {len(clues)} clues")
+            except Exception as e:
+                console.print(f"⚠️ Clue loading failed: {e}", style="yellow")
 
-            if clues:
-                console.print(f"[green]Found {len(clues)} clues![/green]")
-
-                for i, clue in enumerate(clues, 1):
-                    console.print(f"[bold]Clue {i}:[/bold] {clue['file']}")
-                    if not clue.get('binary', False):
-                        state.add_clue(clue['text'], clue['file'])
-                    else:
-                        state.add_clue(f"Binary clue file: {clue['file']}", clue['file'])
-                        # Set binary data for binary clues to enable binary analyzers
-                        if 'data' in clue:
-                            print(f"Setting binary data from clue: {clue['file']} ({len(clue['data'])} bytes)")
-                            state.set_binary_data(clue['data'])
-                        else:
-                            print(f"Warning: Binary clue {clue['file']} has no 'data' key")
-                            # Try to load the file directly
-                            try:
-                                with open(clue['file'], 'rb') as f:
-                                    binary_data = f.read()
-                                    print(f"Loaded binary data directly: {len(binary_data)} bytes")
-                                    state.set_binary_data(binary_data)
-                            except Exception as e:
-                                print(f"Error loading binary data directly: {e}")
-            else:
-                console.print("[yellow]No clues found.[/yellow]")
-
-        # Load patterns from similar puzzles
-        console.print("\n[bold]Loading patterns from similar puzzles...[/bold]")
-        patterns = load_patterns(path)
-
-        if patterns:
-            console.print(f"[green]Found {len(patterns)} patterns![/green]")
-
-            for i, pattern in enumerate(patterns, 1):
-                console.print(f"[bold]Pattern {i}:[/bold] {pattern['file']} [{pattern['category']}]")
-                state.add_pattern(pattern['text'], pattern['file'], pattern['category'])
-        else:
-            console.print("[yellow]No patterns found.[/yellow]")
-
-        # Debug before analysis
-        if verbose:
-            console.print("[blue]Starting analysis with LLM agent...[/blue]")
-
-        # Run analysis once with full iterations
-        final_state = agent.analyze(state, max_iterations=iterations)
-
-        if verbose:
-            console.print(f"\n[bold]Analysis completed after {iterations} iterations.[/bold]")
-            print_state_details(final_state)
-
-        # Save comprehensive results using enhanced saver
-        # Save comprehensive results using enhanced saver
         try:
-            from core.enhanced_state_saver import enhanced_saver
-            saved_files = enhanced_saver.save_comprehensive_results(final_state, str(path))
+            patterns = load_patterns(puzzle_path)
+            for pattern in patterns:
+                state.add_pattern(pattern['text'], pattern['file'], pattern['category'])
+            if patterns:
+                console.print(f"🔍 Loaded {len(patterns)} patterns")
+        except Exception as e:
+            console.print(f"⚠️ Pattern loading failed: {e}", style="yellow")
 
-            console.print(f"\n[bold green]Results saved successfully![/bold green]")
-            console.print(f"Generated {len(saved_files)} output files:")
+        # Save initial state
+        console.print("💾 Saving initial state...")
+        try:
+            initial_save = saver.save_comprehensive_results(state, puzzle_path, create_compressed=False)
+            console.print(f"📄 Initial state saved")
+        except Exception as e:
+            console.print(f"⚠️ Initial save failed: {e}", style="yellow")
 
-            # Show key files to user
-            key_files = ["summary", "html_report", "potential_keys_txt", "compressed_archive"]
-            for key_file in key_files:
-                if key_file in saved_files:
-                    console.print(f"  [cyan]{key_file}:[/cyan] {saved_files[key_file]}")
+        # Start incremental analysis
+        console.print(f"🚀 Starting analysis with {iterations} max iterations...")
 
-            if "html_report" in saved_files:
-                console.print(
-                    f"\n[bold blue]💡 Tip:[/bold blue] Open the HTML report for a comprehensive view: {saved_files['html_report']}")
+        completed_iterations = 0
+        successful_analyzers = []
+        failed_analyzers = []
 
-        except Exception as save_error:
-            console.print(f"[bold red]Warning: Enhanced save failed, using basic save: {save_error}[/bold red]")
-            # Fallback to basic save
-            result_path = os.path.join(results_dir, f"{path.name}_results.json")
-            with open(result_path, "w") as f:
-                json.dump({
-                    "status": "completed",
-                    "solution": final_state.solution,
-                    "insights": final_state.insights,
-                    "transformations": final_state.transformations
-                }, f, indent=2)
+        # Get available analyzers
+        from analyzers import get_compatible_analyzers, get_analyzer, get_all_analyzers
 
-    # Display results
-    if final_state:
-        display_results(final_state, puzzle_path)
-        return 0 if final_state.solution else 1
-    else:
-        console.print("[bold red]Failed to process puzzle.[/bold red]")
+        try:
+            # Phase 1: Run basic analyzers first
+            console.print("📊 Phase 1: Basic Analysis")
+
+            basic_analyzers = ['binary_analyzer', 'text_analyzer']
+            for analyzer_name in basic_analyzers:
+                if completed_iterations >= iterations:
+                    break
+
+                console.print(f"  🔧 Running {analyzer_name}...")
+                try:
+                    analyzer = get_analyzer(analyzer_name)
+                    if analyzer:
+                        prev_insights = len(state.insights)
+                        prev_transformations = len(state.transformations)
+
+                        state = analyzer(state)
+
+                        new_insights = len(state.insights) - prev_insights
+                        new_transformations = len(state.transformations) - prev_transformations
+
+                        console.print(f"    ✅ Generated {new_insights} insights, {new_transformations} transformations")
+                        successful_analyzers.append(analyzer_name)
+                        completed_iterations += 1
+
+                        # Save incremental results
+                        try:
+                            incremental_save = saver.save_comprehensive_results(
+                                state, puzzle_path, create_compressed=False
+                            )
+                            console.print(f"    💾 Progress saved")
+                        except Exception as e:
+                            console.print(f"    ⚠️ Save failed: {e}", style="yellow")
+
+                except Exception as e:
+                    console.print(f"    ❌ {analyzer_name} failed: {e}", style="red")
+                    failed_analyzers.append((analyzer_name, str(e)))
+
+            # Phase 2: Specialized analyzers
+            console.print("🎯 Phase 2: Specialized Analysis")
+
+            specialized_analyzers = ['encoding_analyzer', 'crypto_analyzer', 'cipher_analyzer']
+            if state.is_binary():
+                specialized_analyzers.extend(['image_analyzer', 'binwalk_analyzer'])
+
+            for analyzer_name in specialized_analyzers:
+                if completed_iterations >= iterations:
+                    break
+
+                console.print(f"  🔧 Running {analyzer_name}...")
+                try:
+                    analyzer = get_analyzer(analyzer_name)
+                    if analyzer:
+                        prev_insights = len(state.insights)
+                        prev_transformations = len(state.transformations)
+
+                        state = analyzer(state)
+
+                        new_insights = len(state.insights) - prev_insights
+                        new_transformations = len(state.transformations) - prev_transformations
+
+                        console.print(f"    ✅ Generated {new_insights} insights, {new_transformations} transformations")
+                        successful_analyzers.append(analyzer_name)
+                        completed_iterations += 1
+
+                        # Save incremental results
+                        try:
+                            incremental_save = saver.save_comprehensive_results(
+                                state, puzzle_path, create_compressed=False
+                            )
+                            console.print(f"    💾 Progress saved")
+                        except Exception as e:
+                            console.print(f"    ⚠️ Save failed: {e}", style="yellow")
+
+                        # Check for solution
+                        if state.solution:
+                            console.print(f"    🎉 Solution found: {state.solution}")
+                            break
+
+                except Exception as e:
+                    console.print(f"    ❌ {analyzer_name} failed: {e}", style="red")
+                    failed_analyzers.append((analyzer_name, str(e)))
+
+            # Phase 3: Advanced analysis with LLM (if available)
+            if completed_iterations < iterations and agent.llm_available:
+                console.print("🤖 Phase 3: AI-Guided Analysis")
+
+                try:
+                    # Let the agent orchestrate remaining analysis
+                    remaining_iterations = iterations - completed_iterations
+                    console.print(f"  🧠 Running AI analysis for {remaining_iterations} iterations...")
+
+                    state = agent.analyze(state, remaining_iterations)
+                    completed_iterations = iterations  # Mark as complete
+
+                    console.print("    ✅ AI analysis completed")
+
+                except Exception as e:
+                    console.print(f"    ❌ AI analysis failed: {e}", style="red")
+                    failed_analyzers.append(("ai_analysis", str(e)))
+
+        except Exception as e:
+            console.print(f"❌ Analysis pipeline failed: {e}", style="red")
+
+        # Final save with comprehensive results
+        console.print("💾 Creating final comprehensive results...")
+
+        try:
+            final_save = saver.save_comprehensive_results(
+                state, puzzle_path, create_compressed=True
+            )
+
+            console.print("📊 Final Results:")
+            for file_type, file_path in final_save.items():
+                if file_path and os.path.exists(file_path):
+                    console.print(f"  • {file_type}: {file_path}")
+
+        except Exception as e:
+            console.print(f"❌ Final save failed: {e}", style="red")
+
+            # Emergency save
+            try:
+                emergency_results = {
+                    'puzzle_path': puzzle_path,
+                    'completed_iterations': completed_iterations,
+                    'successful_analyzers': successful_analyzers,
+                    'failed_analyzers': failed_analyzers,
+                    'insights_count': len(state.insights),
+                    'transformations_count': len(state.transformations),
+                    'solution': state.solution,
+                    'timestamp': datetime.now().isoformat()
+                }
+
+                emergency_file = os.path.join(results_dir, f"emergency_results_{int(time.time())}.json")
+                with open(emergency_file, 'w') as f:
+                    json.dump(emergency_results, f, indent=2)
+
+                console.print(f"🚨 Emergency results saved to: {emergency_file}")
+
+            except Exception as e2:
+                console.print(f"❌ Emergency save also failed: {e2}", style="red")
+
+        # Display summary
+        display_analysis_summary(state, completed_iterations, successful_analyzers, failed_analyzers)
+
+        return 0 if not failed_analyzers or state.solution else 1
+
+    except Exception as e:
+        console.print(f"❌ Critical error: {e}", style="red")
+        return 1
+
+
+def display_analysis_summary(state, completed_iterations, successful_analyzers, failed_analyzers):
+    """Display a summary of the analysis results."""
+    console = Console()
+
+    # Create summary table
+    table = Table(title="Analysis Summary", box=box.ROUNDED)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="white")
+
+    table.add_row("Completed Iterations", str(completed_iterations))
+    table.add_row("Successful Analyzers", str(len(successful_analyzers)))
+    table.add_row("Failed Analyzers", str(len(failed_analyzers)))
+    table.add_row("Total Insights", str(len(state.insights)))
+    table.add_row("Total Transformations", str(len(state.transformations)))
+    table.add_row("Solution Found", "Yes" if state.solution else "No")
+
+    console.print(table)
+
+    # Show successful analyzers
+    if successful_analyzers:
+        console.print("\n✅ Successful Analyzers:")
+        for analyzer in successful_analyzers:
+            console.print(f"  • {analyzer}")
+
+    # Show failed analyzers
+    if failed_analyzers:
+        console.print("\n❌ Failed Analyzers:")
+        for analyzer, error in failed_analyzers:
+            console.print(f"  • {analyzer}: {error[:50]}...")
+
+    # Show recent insights
+    if state.insights:
+        console.print(f"\n💡 Recent Insights (last 3):")
+        for insight in state.insights[-3:]:
+            console.print(f"  • {insight['text'][:80]}...")
+
+    # Show solution if found
+    if state.solution:
+        console.print(f"\n🎯 Solution: {state.solution}")
+
+
+def process_puzzle(puzzle_path, agent, output_dir, iterations, results_dir, use_clues, verbose):
+    """
+    Process a single puzzle file or folder with robust error handling.
+    """
+    console = Console()
+
+    if os.path.isdir(puzzle_path):
+        return process_all_files_in_folder(puzzle_path, agent, output_dir, iterations, results_dir, use_clues, verbose)
+
+    if not os.path.exists(puzzle_path):
+        console.print(f"❌ Puzzle file not found: {puzzle_path}", style="red")
+        return 1
+
+    return process_puzzle_with_incremental_output(
+        puzzle_path, agent, output_dir, iterations, results_dir, use_clues, verbose
+    )
+
+
+def process_all_files_in_folder(folder_path, agent, output_dir, iterations, results_dir, use_clues, verbose):
+    """
+    Process all files in a puzzle folder as a single puzzle.
+    """
+    console = Console()
+
+    try:
+        saver = EnhancedStateSaver(output_dir, results_dir)
+        state = State()
+
+        # Get all files in the folder
+        puzzle_files = []
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if not file.startswith('.'):  # Skip hidden files
+                    puzzle_files.append(file_path)
+
+        if not puzzle_files:
+            console.print(f"❌ No files found in folder: {folder_path}", style="red")
+            return 1
+
+        console.print(f"📁 Processing folder with {len(puzzle_files)} files")
+
+        # Process each file
+        for i, file_path in enumerate(puzzle_files, 1):
+            console.print(f"📄 Processing file {i}/{len(puzzle_files)}: {os.path.basename(file_path)}")
+
+            try:
+                # Load file content
+                with open(file_path, 'rb') as f:
+                    file_content = f.read()
+
+                # Add as related file to state
+                state.add_related_file(os.path.basename(file_path), file_content)
+
+                # If this is the first/main file, set it as the puzzle file
+                if i == 1:
+                    state.set_puzzle_file(file_path)
+
+            except Exception as e:
+                console.print(f"⚠️ Failed to load {file_path}: {e}", style="yellow")
+                continue
+
+        # Run analysis on the combined state
+        return process_puzzle_with_incremental_output(
+            folder_path, agent, output_dir, iterations, results_dir, use_clues, verbose
+        )
+
+    except Exception as e:
+        console.print(f"❌ Failed to process folder: {e}", style="red")
         return 1
 
 
 def display_results(state, puzzle_path):
     """Display the analysis results in a structured format."""
-    console.print("\n[bold cyan]═════════════════════════════════════════[/bold cyan]")
-    console.print("[bold cyan]           ANALYSIS RESULTS           [/bold cyan]")
-    console.print("[bold cyan]═════════════════════════════════════════[/bold cyan]\n")
+    console = Console()
 
-    # Display puzzle info in a panel
-    info_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
-    info_table.add_column("Property", style="cyan")
-    info_table.add_column("Value", style="green")
+    console.print("\n" + "=" * 80)
+    console.print("📊 ANALYSIS RESULTS", style="bold blue", justify="center")
+    console.print("=" * 80)
 
-    info_table.add_row("File", str(puzzle_path))
-    info_table.add_row("Type", state.file_type or "Unknown")
-    info_table.add_row("Size", f"{state.file_size} bytes" if state.file_size else "Unknown")
-
-    status_style = "green" if state.solution else "yellow"
-    info_table.add_row("Status", f"[{status_style}]{'Solved' if state.solution else 'Unsolved'}[/{status_style}]")
+    # Basic info
+    console.print(f"📁 Puzzle: {puzzle_path}")
+    console.print(f"📈 Insights: {len(state.insights)}")
+    console.print(f"🔄 Transformations: {len(state.transformations)}")
 
     if state.solution:
-        info_table.add_row("Solution", f"[bold green]{state.solution}[/bold green]")
+        console.print(Panel(f"🎯 SOLUTION: {state.solution}", style="bold green"))
 
-    console.print(Panel(info_table, title="[bold]Puzzle Information[/bold]", border_style="blue"))
-
-    # Display insights in a panel
+    # Show key insights
     if state.insights:
-        insights_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
-        insights_table.add_column("Time", style="dim")
-        insights_table.add_column("Analyzer", style="cyan")
-        insights_table.add_column("Insight", style="green", no_wrap=False)
+        console.print("\n💡 Key Insights:")
+        for i, insight in enumerate(state.insights[-5:], 1):  # Show last 5
+            console.print(f"  {i}. {insight['text']}")
 
-        for insight in state.insights:
-            insights_table.add_row(
-                insight.get("time", ""),
-                insight.get("analyzer", ""),
-                insight.get("text", "")
-            )
-
-        console.print(Panel(insights_table, title="[bold]Analysis Insights[/bold]", border_style="blue"))
-    else:
-        console.print(Panel("[italic]No insights gathered.[/italic]", title="[bold]Analysis Insights[/bold]", border_style="blue"))
-
-    # Display related files in a panel if they exist
-    if state.related_files:
-        files_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
-        files_table.add_column("Filename", style="cyan")
-        files_table.add_column("Size", style="green")
-        files_table.add_column("SHA-256", style="dim")
-
-        for filename, file_info in state.related_files.items():
-            files_table.add_row(
-                filename,
-                f"{file_info['size']} bytes",
-                file_info['sha256'][:16] + "..."
-            )
-
-        console.print(Panel(files_table, title="[bold]Related Files[/bold]", border_style="blue"))
-
-    # Display clues in a panel if they exist
-    if state.clues:
-        clues_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
-        clues_table.add_column("File", style="cyan")
-        clues_table.add_column("Text", style="green", no_wrap=False)
-
-        for clue in state.clues:
-            clue_text = clue.get("text", "")
-            # Format long text better
-            displayed_text = clue_text if len(clue_text) <= 80 else f"{clue_text[:77]}..."
-
-            clues_table.add_row(
-                clue.get("file", "N/A"),
-                displayed_text
-            )
-
-        console.print(Panel(clues_table, title="[bold]Clues[/bold]", border_style="blue"))
-
-    # Display patterns in a panel if they exist
-    if state.patterns:
-        patterns_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
-        patterns_table.add_column("Category", style="cyan")
-        patterns_table.add_column("File", style="dim")
-        patterns_table.add_column("Description", style="green", no_wrap=False)
-
-        for pattern in state.patterns:
-            pattern_text = pattern.get("text", "")
-            # Format long text better
-            displayed_text = pattern_text if len(pattern_text) <= 80 else f"{pattern_text[:77]}..."
-
-            patterns_table.add_row(
-                pattern.get("category", "Unknown"),
-                pattern.get("file", "N/A"),
-                displayed_text
-            )
-
-        console.print(Panel(patterns_table, title="[bold]Patterns from Similar Puzzles[/bold]", border_style="blue"))
-
-    # Display transformations in panels
+    # Show transformations
     if state.transformations:
-        transformations_panels = []
-        for i, transform in enumerate(state.transformations):
-            input_data = transform.get('input_data', '')
-            output_data = transform.get('output_data', '')
-
-            # Format input/output data for better readability
-            input_display = input_data if len(input_data) <= 100 else f"{input_data[:97]}..."
-            output_display = output_data if len(output_data) <= 100 else f"{output_data[:97]}..."
-
-            transform_panel = Panel(
-                f"[bold cyan]{transform.get('name', 'Transformation')}[/bold cyan]\n"
-                f"[italic]{transform.get('description', '')}[/italic]\n\n"
-                f"[bold]Input:[/bold] {input_display}\n\n"
-                f"[bold]Output:[/bold] {output_display}",
-                title=f"Transformation {i + 1}",
-                title_align="left",
-                border_style="green"
-            )
-            transformations_panels.append(transform_panel)
-
-        console.print(Panel.fit(
-            "\n".join([str(p) for p in transformations_panels]), 
-            title="[bold]Transformations[/bold]", 
-            border_style="blue"
-        ))
-    else:
-        console.print(Panel("[italic]No transformations applied.[/italic]", title="[bold]Transformations[/bold]", border_style="blue"))
-
-    console.print("\n[bold cyan]═════════════════════════════════════════[/bold cyan]")
-    console.print("[bold cyan]            END OF RESULTS             [/bold cyan]")
-    console.print("[bold cyan]═════════════════════════════════════════[/bold cyan]")
+        console.print("\n🔄 Recent Transformations:")
+        for i, transform in enumerate(state.transformations[-3:], 1):  # Show last 3
+            console.print(f"  {i}. {transform['name']}: {transform['description']}")
 
 
-def browse_puzzle_collection(puzzles_dir, agent, results_dir, use_clues=False, verbose=False):
+def browse_puzzle_collection(puzzles_dir, agent, results_dir, use_clues, verbose):
     """Browse the puzzle collection interactively."""
-    categories = browse_puzzles(puzzles_dir)
+    console = Console()
 
-    if not categories:
-        console.print("[bold red]No puzzles found in the collection.[/bold red]")
-        return 1
-
-    # Display categories
-    console.print("Available Puzzle Categories:")
-    category_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
-    category_table.add_column("#")
-    category_table.add_column("Category")
-    category_table.add_column("Puzzles")
-
-    for i, (category, puzzles) in enumerate(categories.items(), 1):
-        category_table.add_row(
-            str(i),
-            category,
-            str(len(puzzles))
-        )
-
-    console.print(category_table)
-
-    # Select category
-    category_choices = [str(i) for i in range(1, len(categories) + 1)]
-    category_choice = IntPrompt.ask(
-        f"Select a category (number) [{'/'.join(category_choices)}]",
-        choices=category_choices,
-        default=1
-    )
-
-    # Get the selected category
-    selected_category = list(categories.keys())[category_choice - 1]
-    puzzles = categories[selected_category]
-
-    # Display puzzles in the category
-    console.print(f"Puzzles in category '{selected_category}':")
-    puzzle_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE)
-    puzzle_table.add_column("#")
-    puzzle_table.add_column("Puzzle")
-    puzzle_table.add_column("Size")
-    puzzle_table.add_column("Has Clue")
-
-    for i, puzzle in enumerate(puzzles, 1):
-        info = get_puzzle_info(puzzle)
-        puzzle_table.add_row(
-            str(i),
-            Path(puzzle).name,
-            f"{info['size']} bytes",
-            "Yes" if info["has_clue"] else "No"
-        )
-
-    console.print(puzzle_table)
-
-    # Select puzzle
-    puzzle_choices = [str(i) for i in range(1, len(puzzles) + 1)]
-    puzzle_choice = IntPrompt.ask(
-        f"Select a puzzle (number) [{'/'.join(puzzle_choices)}]",
-        choices=puzzle_choices,
-        default=1
-    )
-
-    # Get the selected puzzle path
-    selected_puzzle = puzzles[puzzle_choice - 1]
-
-    # Check if it has clues and ask if we should use them
-    info = get_puzzle_info(selected_puzzle)
-    if info["has_clue"] and not use_clues:
-        use_clues = Prompt.ask(
-            "This puzzle has clues available. Use them?",
-            choices=["y", "n"],
-            default="y"
-        ).lower() == "y"
-
-    # Determine if we should process a folder or single file
-    selected_path = Path(selected_puzzle)
-
-    if selected_path.is_dir():
-        console.print(f"[bold cyan]Selected puzzle folder: {selected_path}[/bold cyan]")
-        return process_all_files_in_folder(
-            selected_path, agent, results_dir=results_dir, use_clues=use_clues, verbose=verbose
-        )
-    else:
-        # Check if there are other files in the same folder
-        parent_dir = selected_path.parent
-        other_files = list(parent_dir.glob("*"))
-
-        if len(other_files) > 1:  # More than just the selected file
-            console.print("[yellow]This puzzle has multiple files in its folder.[/yellow]")
-            process_all = Prompt.ask(
-                "Process all files in the folder as part of the puzzle?",
-                choices=["y", "n"],
-                default="y"
-            )
-
-            if process_all.lower() == "y":
-                console.print(f"[bold cyan]Processing all files in: {parent_dir}[/bold cyan]")
-                return process_all_files_in_folder(
-                    parent_dir, agent, results_dir=results_dir, use_clues=use_clues, verbose=verbose
-                )
-
-        # Process just the selected file
-        console.print(f"[bold cyan]Selected puzzle file: {selected_path}[/bold cyan]")
-        return process_puzzle(
-            selected_puzzle, agent, results_dir=results_dir, use_clues=use_clues, verbose=verbose
-        )
-
-
-def interactive_mode(agent):
-    """Run in interactive mode."""
-    from ui.interactive import start_interactive_session
-    console.print("[bold cyan]Starting interactive mode...[/bold cyan]")
-    start_interactive_session(agent)
-    return 0
-
-
-def read_last_results(results_dir="./results"):
-    """
-    Read and display the most recent results file.
-
-    Args:
-        results_dir: Directory containing results files
-
-    Returns:
-        Exit code (0 for success, non-zero for failure)
-    """
     try:
-        results_path = Path(results_dir)
-
-        # Find all results files
-        result_files = list(results_path.glob("*_results.json"))
-
-        if not result_files:
-            console.print("[bold red]No results files found.[/bold red]")
+        puzzles = browse_puzzles(puzzles_dir)
+        if not puzzles:
+            console.print("❌ No puzzles found in the collection.", style="red")
             return 1
 
-        # Sort by modification time (most recent first)
-        result_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-        latest_result = result_files[0]
+        while True:
+            console.print("\n🧩 Available Puzzles:")
+            for i, puzzle in enumerate(puzzles, 1):
+                info = get_puzzle_info(puzzle)
+                console.print(f"  {i}. {info['name']} ({info['type']}, {info['size']})")
 
-        console.print(f"[bold cyan]Reading most recent results: {latest_result.name}[/bold cyan]")
+            console.print("  0. Exit")
 
-        # Load the JSON data
-        with open(latest_result, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            try:
+                choice = IntPrompt.ask("Select puzzle", default=0)
+                if choice == 0:
+                    break
+                elif 1 <= choice <= len(puzzles):
+                    selected_puzzle = puzzles[choice - 1]
+                    iterations = IntPrompt.ask("Max iterations", default=10)
 
-        # Display results in a structured format
-        console.print("\n[bold cyan]═════════════════════════════════════════[/bold cyan]")
-        console.print("[bold cyan]           LAST RUN RESULTS            [/bold cyan]")
-        console.print("[bold cyan]═════════════════════════════════════════[/bold cyan]\n")
+                    result = process_puzzle(
+                        selected_puzzle, agent, "output", iterations,
+                        results_dir, use_clues, verbose
+                    )
 
-        # Display metadata in a panel
-        metadata = data.get("metadata", {})
-        puzzle_info = data.get("puzzle_info", {})
-        analysis_summary = data.get("analysis_summary", {})
+                    if result == 0:
+                        console.print("✅ Analysis completed successfully!", style="green")
+                    else:
+                        console.print("⚠️ Analysis completed with issues.", style="yellow")
+                else:
+                    console.print("❌ Invalid selection.", style="red")
 
-        metadata_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
-        metadata_table.add_column("Property", style="cyan")
-        metadata_table.add_column("Value", style="green")
-
-        metadata_table.add_row("Timestamp", metadata.get("timestamp", "Unknown"))
-        metadata_table.add_row("Version", metadata.get("crypto_hunter_version", "Unknown"))
-        metadata_table.add_row("Duration", metadata.get("analysis_duration", "Unknown"))
-        metadata_table.add_row("Puzzle File", puzzle_info.get("puzzle_file", "Unknown"))
-        metadata_table.add_row("File Type", puzzle_info.get("file_type", "Unknown"))
-        metadata_table.add_row("File Size", f"{puzzle_info.get('file_size', 'Unknown')} bytes")
-
-        status_style = "green" if analysis_summary.get("solution") else "yellow"
-        status_text = "Solved" if analysis_summary.get("solution") else analysis_summary.get("status", "Unknown")
-        metadata_table.add_row("Status", f"[{status_style}]{status_text}[/{status_style}]")
-
-        if analysis_summary.get("solution"):
-            metadata_table.add_row("Solution", f"[bold green]{analysis_summary.get('solution')}[/bold green]")
-
-        console.print(Panel(metadata_table, title="[bold]Analysis Information[/bold]", border_style="blue"))
-
-        # Display summary statistics
-        summary_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
-        summary_table.add_column("Statistic", style="cyan")
-        summary_table.add_column("Count", style="green")
-
-        summary_table.add_row("Insights", str(analysis_summary.get("insights_count", 0)))
-        summary_table.add_row("Transformations", str(analysis_summary.get("transformations_count", 0)))
-        summary_table.add_row("Analyzers Used", str(len(analysis_summary.get("analyzers_used", []))))
-        summary_table.add_row("Related Files", str(analysis_summary.get("related_files_count", 0)))
-        summary_table.add_row("Clues", str(analysis_summary.get("clues_count", 0)))
-        summary_table.add_row("Patterns", str(analysis_summary.get("patterns_count", 0)))
-        summary_table.add_row("High Confidence Extractions", str(analysis_summary.get("high_confidence_extractions", 0)))
-
-        console.print(Panel(summary_table, title="[bold]Analysis Summary[/bold]", border_style="blue"))
-
-        # Display insights
-        insights = data.get("insights", [])
-        if insights:
-            insights_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
-            insights_table.add_column("Time", style="dim")
-            insights_table.add_column("Analyzer", style="cyan")
-            insights_table.add_column("Insight", style="green", no_wrap=False)
-
-            # Show the last 10 insights
-            for insight in insights[-10:]:
-                insights_table.add_row(
-                    insight.get("time", ""),
-                    insight.get("analyzer", ""),
-                    insight.get("text", "")
-                )
-
-            console.print(Panel(insights_table, title=f"[bold]Recent Insights (showing {min(10, len(insights))} of {len(insights)})[/bold]", border_style="blue"))
-
-        # Ask if user wants to see more details
-        more_details = Prompt.ask(
-            "Would you like to see more details?",
-            choices=["y", "n"],
-            default="n"
-        )
-
-        if more_details.lower() == "y":
-            # Display transformations
-            transformations = data.get("transformations", [])
-            if transformations:
-                console.print("\n[bold cyan]Transformations:[/bold cyan]")
-                for i, transform in enumerate(transformations[:5], 1):  # Show first 5
-                    console.print(f"[bold]{i}. {transform.get('name', 'Unknown')}[/bold]")
-                    console.print(f"   Description: {transform.get('description', 'Unknown')}")
-                    console.print(f"   Analyzer: {transform.get('analyzer', 'Unknown')}")
-                    console.print(f"   Output: {str(transform.get('output_data', ''))[:100]}...")
-                    console.print()
-
-            # Display all insights if requested
-            all_insights = Prompt.ask(
-                "Would you like to see all insights?",
-                choices=["y", "n"],
-                default="n"
-            )
-
-            if all_insights.lower() == "y":
-                console.print("\n[bold cyan]All Insights:[/bold cyan]")
-                for i, insight in enumerate(insights, 1):
-                    console.print(f"[dim]{i}.[/dim] [{insight.get('time', '')}] [cyan]{insight.get('analyzer', '')}:[/cyan] {insight.get('text', '')}")
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                console.print(f"❌ Error: {e}", style="red")
 
         return 0
 
     except Exception as e:
-        console.print(f"[bold red]Error reading results: {e}[/bold red]")
+        console.print(f"❌ Failed to browse puzzles: {e}", style="red")
+        return 1
+
+
+def interactive_mode(agent):
+    """Run in interactive mode."""
+    start_interactive_session(agent)
+
+
+def read_last_results(results_dir):
+    """
+    Read and display the most recent results file.
+    """
+    console = Console()
+
+    try:
+        if not os.path.exists(results_dir):
+            console.print(f"❌ Results directory not found: {results_dir}", style="red")
+            return 1
+
+        # Find the most recent results file
+        result_files = []
+        for file in os.listdir(results_dir):
+            if file.endswith('.json') and ('results' in file or 'analysis' in file):
+                file_path = os.path.join(results_dir, file)
+                result_files.append((file_path, os.path.getmtime(file_path)))
+
+        if not result_files:
+            console.print("❌ No results files found.", style="red")
+            return 1
+
+        # Sort by modification time (newest first)
+        result_files.sort(key=lambda x: x[1], reverse=True)
+        latest_file = result_files[0][0]
+
+        console.print(f"📄 Loading latest results from: {latest_file}")
+
+        with open(latest_file, 'r') as f:
+            results = json.load(f)
+
+        # Display results
+        console.print("\n📊 Latest Analysis Results:")
+        console.print(f"Puzzle: {results.get('puzzle_path', 'Unknown')}")
+        console.print(f"Date: {results.get('analysis_date', 'Unknown')}")
+        console.print(f"Insights: {results.get('insights_count', 0)}")
+        console.print(f"Transformations: {results.get('transformations_count', 0)}")
+
+        if results.get('solution'):
+            console.print(f"🎯 Solution: {results['solution']}")
+
+        if 'insights' in results and results['insights']:
+            console.print("\n💡 Recent Insights:")
+            for i, insight in enumerate(results['insights'][-5:], 1):
+                console.print(f"  {i}. {insight}")
+
+        return 0
+
+    except Exception as e:
+        console.print(f"❌ Failed to read results: {e}", style="red")
         return 1
 
 
 def main():
     """Main entry point for the application."""
-    # Display welcome message
-    display_welcome()
-
-    # Parse command line arguments
     args = parse_arguments()
 
-    # Set up the environment
+    # Setup environment
     setup_environment(args)
 
-    # Check if we should read the last results
+    # Display welcome
+    if not args.puzzle and not args.interactive and not args.browse and not args.last_results:
+        display_welcome()
+
+    # Handle special modes
     if args.last_results:
         return read_last_results(args.results_dir)
 
-    # Enter interactive or browsing mode if no puzzle file is provided
-    mode = None
-    if not args.puzzle_file and not args.browse_puzzles and not args.interactive:
-        mode = interactive_menu()
+    # Initialize agent
+    try:
+        agent = CryptoAgent(args.provider, args.api_key, args.model, args.verbose)
+    except Exception as e:
+        console = Console()
+        console.print(f"❌ Failed to initialize agent: {e}", style="red")
+        return 1
 
-        if mode == "exit":
-            return 0
-    elif args.browse_puzzles:
-        mode = "browse"
-    elif args.interactive:
-        mode = "interactive"
-    else:
-        mode = "process"
-
-    # Select provider interactively if not specified
-    provider = args.provider
-    api_key = args.api_key
-
-    if not provider and not api_key:
-        provider, api_key = select_provider_interactively()
-
-    # Initialize the agent
-    agent = CryptoAgent(
-        provider=provider,
-        api_key=api_key,
-        model=args.model,
-        verbose=args.verbose
-    )
-
-    # Execute the appropriate mode
-    if mode == "browse":
+    # Handle different modes
+    if args.interactive:
+        interactive_mode(agent)
+        return 0
+    elif args.browse:
+        puzzles_dir = args.puzzle or "puzzles"
         return browse_puzzle_collection(
-            args.puzzle_dir, agent, args.results_dir, args.use_clues, verbose=args.verbose
+            puzzles_dir, agent, args.results_dir, not args.no_clues, args.verbose
         )
-    elif mode == "interactive":
-        return interactive_mode(agent)
-    else:  # Process a single puzzle
+    elif args.puzzle:
         return process_puzzle(
-            args.puzzle_file,
-            agent,
-            args.output_dir,
-            args.iterations,
-            args.results_dir,
-            args.use_clues,
-            verbose=args.verbose
+            args.puzzle, agent, args.output_dir, args.iterations,
+            args.results_dir, not args.no_clues, args.verbose
         )
+    else:
+        # Interactive menu
+        console = Console()
+        while True:
+            console.print("\n🔐 Crypto Hunter Menu:")
+            console.print("1. Analyze single puzzle")
+            console.print("2. Browse puzzle collection")
+            console.print("3. Interactive mode")
+            console.print("4. View last results")
+            console.print("0. Exit")
+
+            try:
+                choice = IntPrompt.ask("Select option", default=0)
+
+                if choice == 0:
+                    break
+                elif choice == 1:
+                    puzzle_path = Prompt.ask("Enter puzzle path")
+                    iterations = IntPrompt.ask("Max iterations", default=10)
+                    result = process_puzzle(
+                        puzzle_path, agent, args.output_dir, iterations,
+                        args.results_dir, not args.no_clues, args.verbose
+                    )
+                elif choice == 2:
+                    puzzles_dir = Prompt.ask("Enter puzzles directory", default="puzzles")
+                    browse_puzzle_collection(
+                        puzzles_dir, agent, args.results_dir, not args.no_clues, args.verbose
+                    )
+                elif choice == 3:
+                    interactive_mode(agent)
+                elif choice == 4:
+                    read_last_results(args.results_dir)
+                else:
+                    console.print("❌ Invalid selection.", style="red")
+
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                console.print(f"❌ Error: {e}", style="red")
+
+        return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        exit_code = main()
+        sys.exit(exit_code)
+    except KeyboardInterrupt:
+        print("\n⚠️ Interrupted by user")
+        sys.exit(130)
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        sys.exit(1)
