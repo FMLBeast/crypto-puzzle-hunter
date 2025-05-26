@@ -39,3 +39,8 @@ pylint>=3.0.0
 
 # Note: zsteg is a Ruby gem and needs to be installed separately with:
 # gem install zsteg
+
+requests~=2.32.3
+binwalk~=2.3.3  # Version 2.3.3+ required for binwalk.core module
+opencv-python~=4.11.0.86
+eth-keys~=0.7.0

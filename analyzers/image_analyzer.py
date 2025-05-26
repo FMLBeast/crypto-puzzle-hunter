@@ -34,9 +34,10 @@ except ImportError:
 class AdvancedSteganographyExtractor:
     """Advanced steganography extraction capabilities for Crypto Hunter"""
 
-    def __init__(self, image_data: bytes, verbose: bool = False):
+    def __init__(self, image_data: bytes, verbose: bool = False, state: Optional['State'] = None):
         self.image_data = image_data
         self.verbose = verbose
+        self.state = state
         self.results = {}
         self.result_hashes = set()
 
@@ -74,20 +75,52 @@ class AdvancedSteganographyExtractor:
         # Check available channels
         if len(self.pixels_pil.shape) < 3:
             available_channels = [0]  # Grayscale
+            if self.verbose:
+                print(f"Image is grayscale, using single channel")
+            if self.state:
+                self.state.add_insight(f"Image is grayscale, using single channel", analyzer="image_analyzer")
         else:
             available_channels = list(range(min(4, self.pixels_pil.shape[2])))
+            if self.verbose:
+                print(f"Image has {len(available_channels)} channels")
+            if self.state:
+                self.state.add_insight(f"Image has {len(available_channels)} channels", analyzer="image_analyzer")
 
         channel_names = ['r', 'g', 'b', 'a']
 
-        # Try different bitplanes (b1-b8 where b1 is LSB)
-        for bit_plane in range(8):
+        # Use a comprehensive set of combinations to analyze
+        # Include multiple bit planes, bit orders, and scan orders
+        # This will generate more combinations to find hidden data
+        bit_planes_to_check = [0, 1, 2]  # Check first 3 bits
+        bit_orders_to_check = ['lsb', 'msb']  # Check both LSB and MSB
+        scan_orders_to_check = ['xy', 'yx', 'spiral']  # Multiple scan patterns
+
+        # Calculate total combinations
+        total_combinations = len(bit_planes_to_check) * len(available_channels) * len(bit_orders_to_check) * len(scan_orders_to_check)
+        processed = 0
+
+        if self.verbose:
+            print(f"Starting optimized multi-bitplane analysis with {total_combinations} combinations")
+        if self.state:
+            self.state.add_insight(f"Starting optimized multi-bitplane analysis with {total_combinations} combinations", analyzer="image_analyzer")
+
+        for bit_plane in bit_planes_to_check:
             for channel in available_channels:
                 if channel == 3 and len(self.pixels_pil.shape) < 4:
                     continue
 
                 # Advanced bit orderings and scan patterns
-                for bit_order in ['lsb', 'msb']:
-                    for scan_order in ['xy', 'yx', 'spiral', 'zigzag']:
+                for bit_order in bit_orders_to_check:
+                    for scan_order in scan_orders_to_check:
+                        processed += 1
+                        bp_name = f"b{bit_plane + 1}"
+                        ch_name = channel_names[channel] if channel < 4 else f"ch{channel}"
+
+                        if self.verbose:
+                            print(f"Processing combination {processed}/{total_combinations}: {bp_name}, {ch_name}, {bit_order}, {scan_order}")
+                        if self.state:
+                            self.state.add_insight(f"Processing combination {processed}/{total_combinations}: {bp_name}, {ch_name}, {bit_order}, {scan_order}", analyzer="image_analyzer")
+
                         bits = self._extract_bits_advanced(
                             bit_plane, channel, bit_order, scan_order
                         )
@@ -100,6 +133,118 @@ class AdvancedSteganographyExtractor:
                                 key = f"{bp_name}_{ch_name}_{bit_order}_{scan_order}"
                                 results[key] = data
 
+                                # Try to decode as text for display
+                                try:
+                                    text_preview = data[:100].decode('utf-8', errors='replace')
+                                    if len(data) > 100:
+                                        text_preview += "..."
+                                except:
+                                    text_preview = f"Binary data ({len(data)} bytes)"
+
+                                if self.verbose:
+                                    print(f"Found meaningful data in {key}: {len(data)} bytes")
+                                if self.state:
+                                    self.state.add_insight(f"Found meaningful data in {key}: {len(data)} bytes", analyzer="image_analyzer")
+                                    self.state.add_transformation(
+                                        name=f"Multi-bitplane - {key}",
+                                        description=f"Extracted data using {key} configuration",
+                                        input_data=f"Image analysis via {key}",
+                                        output_data=text_preview,
+                                        analyzer="image_analyzer"
+                                    )
+
+                                # Write data to file and run binwalk on it
+                                if self.state:
+                                    import os
+                                    from core.steganography_tools import run_binwalk
+
+                                    output_dir = os.path.join(os.getcwd(), "output")
+                                    if not os.path.exists(output_dir):
+                                        os.makedirs(output_dir)
+
+                                    # Create a safe filename
+                                    safe_method = key.replace('/', '_').replace('\\', '_')
+                                    file_path = os.path.join(output_dir, f"multi_bitplane_{safe_method}")
+
+                                    # Determine file extension based on content
+                                    file_type = _detect_file_type(data) if '_detect_file_type' in globals() else None
+                                    if file_type:
+                                        if "JPEG" in file_type:
+                                            file_path += ".jpg"
+                                        elif "PNG" in file_type:
+                                            file_path += ".png"
+                                        elif "GIF" in file_type:
+                                            file_path += ".gif"
+                                        elif "PDF" in file_type:
+                                            file_path += ".pdf"
+                                        elif "ZIP" in file_type or "RAR" in file_type or "7z" in file_type:
+                                            file_path += ".zip"
+                                        elif "audio" in file_type.lower():
+                                            file_path += ".mp3"
+                                        else:
+                                            file_path += ".bin"
+                                    else:
+                                        # Try to detect if it's text
+                                        try:
+                                            text = data.decode('utf-8', errors='strict')
+                                            is_text = True
+                                        except UnicodeDecodeError:
+                                            is_text = False
+
+                                        if is_text:
+                                            file_path += ".txt"
+                                        else:
+                                            file_path += ".bin"
+
+                                    # Write the file
+                                    with open(file_path, 'wb') as f:
+                                        f.write(data)
+
+                                    self.state.add_insight(f"Saved multi-bitplane result to: {file_path} ({len(data)} bytes)", analyzer="image_analyzer")
+                                    self.state.add_related_file(file_path, data)
+
+                                    # Run binwalk on the extracted data
+                                    try:
+                                        binwalk_results = run_binwalk(data)
+                                        if binwalk_results.get("success"):
+                                            # Add insights for signatures found
+                                            signatures = binwalk_results.get("signatures", [])
+                                            if signatures:
+                                                self.state.add_insight(f"Binwalk found {len(signatures)} signatures in {key}", analyzer="image_analyzer")
+                                                for sig in signatures[:5]:  # Limit to first 5 to avoid spam
+                                                    self.state.add_insight(
+                                                        f"Binwalk signature in {key} at offset {sig['offset']}: {sig['description']}",
+                                                        analyzer="image_analyzer"
+                                                    )
+
+                                            # Add insights for extracted files
+                                            extracted_files = binwalk_results.get("extracted_files", [])
+                                            if extracted_files:
+                                                self.state.add_insight(f"Binwalk extracted {len(extracted_files)} files from {key}", analyzer="image_analyzer")
+                                                for file_info in extracted_files[:5]:  # Limit to first 5
+                                                    self.state.add_insight(
+                                                        f"Binwalk extracted from {key}: {file_info['name']} ({file_info['size']} bytes)",
+                                                        analyzer="image_analyzer"
+                                                    )
+
+                                                    # Save the extracted file
+                                                    extracted_file_path = os.path.join(output_dir, f"binwalk_from_{safe_method}_{os.path.basename(file_info['name'])}")
+                                                    with open(extracted_file_path, 'wb') as f:
+                                                        f.write(file_info['data'])
+
+                                                    self.state.add_insight(f"Saved binwalk extraction to: {extracted_file_path}", analyzer="image_analyzer")
+                                                    self.state.add_related_file(extracted_file_path, file_info['data'])
+                                        else:
+                                            error_msg = binwalk_results.get("error", "Unknown error")
+                                            self.state.add_insight(f"Binwalk analysis of {key} failed: {error_msg}", analyzer="image_analyzer")
+                                    except Exception as e:
+                                        self.state.add_insight(f"Error running binwalk on {key}: {str(e)}", analyzer="image_analyzer")
+
+        if self.verbose:
+            print(f"Multi-bitplane analysis complete: found {len(results)} meaningful results")
+        if self.state:
+            self.state.add_insight(f"Multi-bitplane analysis complete: found {len(results)} meaningful results", analyzer="image_analyzer")
+
         return results
 
     def extract_prime_fibonacci_patterns(self) -> Dict[str, bytes]:
@@ -109,22 +254,23 @@ class AdvancedSteganographyExtractor:
         if not HAS_PIL or self.pixels_pil is None:
             return results
 
-        # Try prime and Fibonacci filters
+        # Try prime and Fibonacci filters with more combinations
         for filter_type in ['prime', 'fibonacci']:
-            for bit_plane in [0, 2, 4]:
+            for bit_plane in [0, 1, 2]:  # Check first 3 bits
                 for channel in range(min(4, self.pixels_pil.shape[2] if len(self.pixels_pil.shape) > 2 else 1)):
-                    filter_func = self._get_special_filter(filter_type)
+                    for bit_order in ['lsb', 'msb']:  # Check both LSB and MSB
+                        filter_func = self._get_special_filter(filter_type)
 
-                    bits = self._extract_bits_advanced(
-                        bit_plane, channel, 'lsb', 'xy', filter_func
-                    )
+                        bits = self._extract_bits_advanced(
+                            bit_plane, channel, bit_order, 'xy', filter_func
+                        )
 
-                    if bits:
-                        data = self._bits_to_bytes(bits)
-                        if self._is_meaningful_data(data):
-                            ch_name = ['r', 'g', 'b', 'a'][channel] if channel < 4 else f"ch{channel}"
-                            key = f"b{bit_plane + 1}_{ch_name}_{filter_type}"
-                            results[key] = data
+                        if bits:
+                            data = self._bits_to_bytes(bits)
+                            if self._is_meaningful_data(data):
+                                ch_name = ['r', 'g', 'b', 'a'][channel] if channel < 4 else f"ch{channel}"
+                                key = f"b{bit_plane + 1}_{ch_name}_{bit_order}_{filter_type}"
+                                results[key] = data
 
         return results
 
@@ -140,23 +286,25 @@ class AdvancedSteganographyExtractor:
             b'key', b'password', bytes(range(16))
         ]
 
-        for bit_plane in [0, 2, 4]:
+        for bit_plane in [0, 1, 2]:  # Check first 3 bits
             for channel in range(min(4, self.pixels_pil.shape[2] if len(self.pixels_pil.shape) > 2 else 1)):
-                bits = self._extract_bits_advanced(bit_plane, channel, 'lsb', 'xy')
+                for bit_order in ['lsb', 'msb']:  # Check both LSB and MSB
+                    for scan_order in ['xy', 'yx']:  # Check multiple scan patterns
+                        bits = self._extract_bits_advanced(bit_plane, channel, bit_order, scan_order)
 
-                if bits:
-                    raw_data = self._bits_to_bytes(bits)
+                        if bits:
+                            raw_data = self._bits_to_bytes(bits)
 
-                    for key in xor_keys:
-                        xor_data = bytearray()
-                        for i, b in enumerate(raw_data):
-                            xor_data.append(b ^ key[i % len(key)])
+                            for key in xor_keys:
+                                xor_data = bytearray()
+                                for i, b in enumerate(raw_data):
+                                    xor_data.append(b ^ key[i % len(key)])
 
-                        if self._is_meaningful_data(bytes(xor_data)):
-                            ch_name = ['r', 'g', 'b', 'a'][channel] if channel < 4 else f"ch{channel}"
-                            key_desc = binascii.hexlify(key[:4]).decode('ascii')
-                            key_name = f"b{bit_plane + 1}_{ch_name}_xor_{key_desc}"
-                            results[key_name] = bytes(xor_data)
+                                if self._is_meaningful_data(bytes(xor_data)):
+                                    ch_name = ['r', 'g', 'b', 'a'][channel] if channel < 4 else f"ch{channel}"
+                                    key_desc = binascii.hexlify(key[:4]).decode('ascii')
+                                    key_name = f"b{bit_plane + 1}_{ch_name}_{bit_order}_{scan_order}_xor_{key_desc}"
+                                    results[key_name] = bytes(xor_data)
 
         return results
 
@@ -185,18 +333,20 @@ class AdvancedSteganographyExtractor:
                     ('mid', (8, 24, 8, 24)),
                     ('high', (24, 32, 24, 32))
                 ]:
-                    bits = []
-                    for y in range(start_y, min(end_y, dct_data.shape[0])):
-                        for x in range(start_x, min(end_x, dct_data.shape[1])):
-                            coef = int(dct_data[y, x])
-                            bits.append(coef & 1)
+                    # Check multiple bit planes in the frequency coefficients
+                    for bit_plane in range(3):  # Check first 3 bits
+                        bits = []
+                        for y in range(start_y, min(end_y, dct_data.shape[0])):
+                            for x in range(start_x, min(end_x, dct_data.shape[1])):
+                                coef = int(dct_data[y, x])
+                                bits.append((coef >> bit_plane) & 1)
 
-                    if bits:
-                        data = self._bits_to_bytes(bits)
-                        if self._is_meaningful_data(data):
-                            ch_name = ['r', 'g', 'b'][channel] if channel < 3 else f"ch{channel}"
-                            key = f"dct_{ch_name}_{region}_freq"
-                            results[key] = data
+                        if bits:
+                            data = self._bits_to_bytes(bits)
+                            if self._is_meaningful_data(data):
+                                ch_name = ['r', 'g', 'b'][channel] if channel < 3 else f"ch{channel}"
+                                key = f"dct_{ch_name}_{region}_freq_b{bit_plane + 1}"
+                                results[key] = data
 
             except Exception:
                 pass
@@ -206,20 +356,21 @@ class AdvancedSteganographyExtractor:
                 dft_data = cv2.dft(np.float32(channel_data), flags=cv2.DFT_COMPLEX_OUTPUT)
                 magnitude, phase = cv2.cartToPolar(dft_data[:, :, 0], dft_data[:, :, 1])
 
-                # Extract from magnitude and phase
+                # Extract from magnitude and phase with multiple bit planes
                 for domain, data_source in [('magnitude', magnitude), ('phase', phase)]:
-                    bits = []
-                    for y in range(min(16, data_source.shape[0])):
-                        for x in range(min(16, data_source.shape[1])):
-                            val = int(data_source[y, x] * (100 if domain == 'phase' else 1))
-                            bits.append(val & 1)
+                    for bit_plane in range(3):  # Check first 3 bits
+                        bits = []
+                        for y in range(min(16, data_source.shape[0])):
+                            for x in range(min(16, data_source.shape[1])):
+                                val = int(data_source[y, x] * (100 if domain == 'phase' else 1))
+                                bits.append((val >> bit_plane) & 1)
 
-                    if bits:
-                        data = self._bits_to_bytes(bits)
-                        if self._is_meaningful_data(data):
-                            ch_name = ['r', 'g', 'b'][channel] if channel < 3 else f"ch{channel}"
-                            key = f"dft_{ch_name}_{domain}"
-                            results[key] = data
+                        if bits:
+                            data = self._bits_to_bytes(bits)
+                            if self._is_meaningful_data(data):
+                                ch_name = ['r', 'g', 'b'][channel] if channel < 3 else f"ch{channel}"
+                                key = f"dft_{ch_name}_{domain}_b{bit_plane + 1}"
+                                results[key] = data
 
             except Exception:
                 pass
@@ -568,18 +719,35 @@ def analyze_image(state: State, **kwargs) -> State:
     # Embedded file detection
     check_embedded_files(state)
 
+    # Create output directory if it doesn't exist
+    import os
+    output_dir = os.path.join(os.getcwd(), "output")
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        state.add_insight(f"Created output directory: {output_dir}", analyzer="image_analyzer")
+    else:
+        state.add_insight(f"Using existing output directory: {output_dir}", analyzer="image_analyzer")
+
     # Advanced steganography analysis
     try:
         state.add_insight(f"Starting advanced steganography analysis", analyzer="image_analyzer")
 
-        extractor = AdvancedSteganographyExtractor(state.binary_data, verbose=False)
+        # Use verbose mode for detailed output and pass state for real-time insights
+        extractor = AdvancedSteganographyExtractor(state.binary_data, verbose=True, state=state)
 
         # Run advanced extractions
         results = {}
 
         # Multi-bitplane analysis
-        state.add_insight("Performing multi-bitplane analysis with advanced scan patterns", analyzer="image_analyzer")
-        results.update(extractor.extract_multi_bitplane_advanced())
+        state.add_insight("Performing optimized multi-bitplane analysis", analyzer="image_analyzer")
+        multi_bitplane_results = extractor.extract_multi_bitplane_advanced()
+        results.update(multi_bitplane_results)
+
+        # Results are already saved to files and processed with binwalk in extract_multi_bitplane_advanced
+        if multi_bitplane_results:
+            state.add_insight(f"Found {len(multi_bitplane_results)} results from multi-bitplane analysis", analyzer="image_analyzer")
+        else:
+            state.add_insight("No meaningful results found from multi-bitplane analysis", analyzer="image_analyzer")
 
         # Prime/Fibonacci pattern analysis
         state.add_insight("Analyzing prime and Fibonacci pixel patterns", analyzer="image_analyzer")

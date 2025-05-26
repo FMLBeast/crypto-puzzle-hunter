@@ -33,9 +33,35 @@ except ImportError:
 
 try:
     import binwalk
-    BINWALK_AVAILABLE = True
+    # Test if binwalk.core is available
+    try:
+        from binwalk.core.module import Modules
+        BINWALK_AVAILABLE = True
+    except ImportError:
+        # binwalk is installed but missing core module
+        try:
+            # Try to use our custom binwalk wrapper
+            from core.binwalk_wrapper import Modules, scan, ModuleException
+            # Monkey patch binwalk module with our scan function
+            binwalk.scan = scan
+            BINWALK_AVAILABLE = True
+            print("Using custom binwalk wrapper as fallback for missing binwalk.core module.")
+        except ImportError:
+            BINWALK_AVAILABLE = False
+            # Print a warning message
+            print("Warning: binwalk is installed but binwalk.core module is missing. Using fallback methods.")
 except ImportError:
-    BINWALK_AVAILABLE = False
+    try:
+        # Try to use our custom binwalk wrapper even if binwalk is not installed
+        from core.binwalk_wrapper import Modules, scan, ModuleException
+        # Create a mock binwalk module
+        import types
+        binwalk = types.ModuleType('binwalk')
+        binwalk.scan = scan
+        BINWALK_AVAILABLE = True
+        print("Using custom binwalk wrapper as binwalk is not installed.")
+    except ImportError:
+        BINWALK_AVAILABLE = False
 
 # ---- Image Steganography Tools ----
 
@@ -607,6 +633,11 @@ def run_binwalk(data: bytes) -> Dict[str, Any]:
                     temp_path = temp_file.name
 
                 try:
+                    # Verify that binwalk.core is available by trying to access a method
+                    # This is an additional check to ensure we don't get ModuleNotFoundError
+                    if not hasattr(binwalk, 'scan'):
+                        raise ModuleNotFoundError("binwalk.scan method not available")
+
                     # Run signature scan
                     signature_results = binwalk.scan(temp_path, signature=True, quiet=True)
 
@@ -636,7 +667,7 @@ def run_binwalk(data: bytes) -> Dict[str, Any]:
                                 result["extracted_files"].append({
                                     "name": rel_path,
                                     "size": len(file_data),
-                                    "data": file_data[:1024]  # Store first 1KB of data
+                                    "data": file_data  # Store the full data
                                 })
 
                     result["success"] = True
@@ -648,9 +679,16 @@ def run_binwalk(data: bytes) -> Dict[str, Any]:
                     except:
                         pass
 
+        except ModuleNotFoundError as e:
+            # Specific handling for missing modules
+            result["error"] = f"Missing binwalk module: {str(e)}"
+            result["fallback"] = "Falling back to command-line binwalk"
+        except AttributeError as e:
+            # Handle the case where binwalk is installed but missing required attributes
+            result["error"] = f"Incomplete binwalk installation: {str(e)}"
+            result["fallback"] = "Falling back to command-line binwalk"
         except Exception as e:
             result["error"] = f"Error using binwalk module: {str(e)}"
-            # Fall back to command-line binwalk
             result["fallback"] = "Falling back to command-line binwalk"
 
     # If Python module failed or is not available, try command-line binwalk
@@ -664,6 +702,22 @@ def run_binwalk(data: bytes) -> Dict[str, Any]:
                     temp_path = temp_file.name
 
                 try:
+                    # First check if binwalk command is available
+                    try:
+                        subprocess.run(["binwalk", "--help"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=5)
+                    except (FileNotFoundError, subprocess.SubprocessError):
+                        # Use our own file signature detection if binwalk is not available
+                        result["error"] = "binwalk command not available, using built-in signature detection"
+                        embedded_files = find_embedded_files(data)
+                        if embedded_files["success"] and embedded_files["embedded_files"]:
+                            for file_info in embedded_files["embedded_files"]:
+                                result["signatures"].append({
+                                    "offset": file_info["offset"],
+                                    "description": f"{file_info['file_type']} signature"
+                                })
+                            result["success"] = True
+                        return result
+
                     # Run binwalk signature scan
                     cmd = ["binwalk", temp_path]
                     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -710,7 +764,7 @@ def run_binwalk(data: bytes) -> Dict[str, Any]:
                                     result["extracted_files"].append({
                                         "name": rel_path,
                                         "size": len(file_data),
-                                        "data": file_data[:1024]  # Store first 1KB of data
+                                        "data": file_data  # Store the full data
                                     })
 
                         result["success"] = True
@@ -724,7 +778,16 @@ def run_binwalk(data: bytes) -> Dict[str, Any]:
                         pass
 
         except FileNotFoundError:
-            result["error"] = "binwalk command not found. Install with: pip install python-binwalk"
+            result["error"] = "binwalk command not found. Using built-in signature detection."
+            # Use our own file signature detection as a last resort
+            embedded_files = find_embedded_files(data)
+            if embedded_files["success"] and embedded_files["embedded_files"]:
+                for file_info in embedded_files["embedded_files"]:
+                    result["signatures"].append({
+                        "offset": file_info["offset"],
+                        "description": f"{file_info['file_type']} signature"
+                    })
+                result["success"] = True
         except Exception as e:
             result["error"] = f"Error running binwalk: {str(e)}"
 

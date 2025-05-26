@@ -4,7 +4,7 @@ Provides real-time logging of the solution process.
 """
 
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -27,6 +27,11 @@ class SolutionLogger:
         self.insights: List[Dict[str, Any]] = []
         self.transformations: List[Dict[str, Any]] = []
         self.solution: Optional[str] = None
+
+        # Callback for real-time LLM feedback
+        self.llm_feedback_callback: Optional[Callable[[str, str, str], None]] = None
+        # Queue of findings that need to be sent to the LLM
+        self.pending_llm_feedback: List[Dict[str, Any]] = []
 
     def log_insight(self, text: str, analyzer: str, time_str: Optional[str] = None) -> None:
         """
@@ -53,6 +58,18 @@ class SolutionLogger:
         console.print(f"╭─ [bold cyan][{time_str}][/bold cyan] [bold green]{analyzer}[/bold green] ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮")
         console.print(f"│ {text}")
         console.print(f"╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯")
+
+        # Queue for LLM feedback
+        self.pending_llm_feedback.append({
+            "type": "insight",
+            "time": time_str,
+            "analyzer": analyzer,
+            "text": text
+        })
+
+        # Send to LLM if callback is registered
+        if self.llm_feedback_callback:
+            self.llm_feedback_callback("insight", analyzer, text)
 
     def log_transformation(self, name: str, description: str, 
                           input_data: str, output_data: str, 
@@ -91,6 +108,22 @@ class SolutionLogger:
         console.print(f"│ Input: {input_data[:100]}{'...' if len(input_data) > 100 else ''}")
         console.print(f"│ Output: {output_data[:100]}{'...' if len(output_data) > 100 else ''}")
         console.print(f"╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯")
+
+        # Queue for LLM feedback
+        self.pending_llm_feedback.append({
+            "type": "transformation",
+            "time": time_str,
+            "name": name,
+            "description": description,
+            "input_data": input_data[:100] + ('...' if len(input_data) > 100 else ''),
+            "output_data": output_data[:100] + ('...' if len(output_data) > 100 else ''),
+            "analyzer": analyzer
+        })
+
+        # Send to LLM if callback is registered
+        if self.llm_feedback_callback:
+            formatted_transformation = f"{name}\n{description}\nInput: {input_data[:100]}{'...' if len(input_data) > 100 else ''}\nOutput: {output_data[:100]}{'...' if len(output_data) > 100 else ''}"
+            self.llm_feedback_callback("transformation", analyzer, formatted_transformation)
 
     def log_solution(self, solution: str) -> None:
         """
@@ -135,6 +168,30 @@ class SolutionLogger:
             Solution or None if not found
         """
         return self.solution
+
+    def register_llm_feedback_callback(self, callback: Callable[[str, str, str], None]) -> None:
+        """
+        Register a callback function to be called when new findings are logged.
+
+        Args:
+            callback: Function that takes (finding_type, analyzer, content) as arguments
+        """
+        self.llm_feedback_callback = callback
+
+    def get_pending_llm_feedback(self) -> List[Dict[str, Any]]:
+        """
+        Get all pending findings that need to be sent to the LLM.
+
+        Returns:
+            List of pending findings
+        """
+        return self.pending_llm_feedback
+
+    def clear_pending_llm_feedback(self) -> None:
+        """
+        Clear the list of pending findings.
+        """
+        self.pending_llm_feedback = []
 
 # Global instance of the solution logger
 solution_logger = SolutionLogger()

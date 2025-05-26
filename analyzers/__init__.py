@@ -8,6 +8,7 @@ from typing import Dict, Callable
 # Lazy import to avoid circular dependencies
 _analyzer_modules = {
     'text_analyzer': 'analyzers.text_analyzer',
+    'text_pattern_analyzer': 'analyzers.text_pattern_analyzer',
     'binary_analyzer': 'analyzers.binary_analyzer',
     'cipher_analyzer': 'analyzers.cipher_analyzer',
     'encoding_analyzer': 'analyzers.encoding_analyzer',

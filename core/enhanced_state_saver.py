@@ -29,6 +29,86 @@ class EnhancedStateSaver:
         # Create directories
         self._setup_directories()
 
+    def load_state(self, puzzle_path: str) -> Optional['State']:
+        """
+        Load a previously saved state for a puzzle
+
+        Args:
+            puzzle_path: Path to the puzzle file
+
+        Returns:
+            State object if found, None otherwise
+        """
+        from core.state import State
+
+        try:
+            puzzle_name = self._get_puzzle_name(puzzle_path)
+
+            # Find the most recent results file for this puzzle
+            result_files = list(self.results_dir.glob(f"{puzzle_name}_*_results.json"))
+
+            if not result_files:
+                self.logger.info(f"No previous results found for {puzzle_name}")
+                return None
+
+            # Sort by modification time (most recent first)
+            result_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            latest_result = result_files[0]
+
+            self.logger.info(f"Found previous results: {latest_result}")
+
+            # Load the JSON data
+            with open(latest_result, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Create a new State object
+            state = State()
+
+            # Set basic attributes
+            state.puzzle_file = data.get("puzzle_info", {}).get("puzzle_file")
+            state.file_type = data.get("puzzle_info", {}).get("file_type")
+            state.file_size = data.get("puzzle_info", {}).get("file_size")
+            state.hash = data.get("puzzle_info", {}).get("hash")
+            state.status = data.get("analysis_summary", {}).get("status", "analyzing")
+            state.puzzle_type = data.get("puzzle_info", {}).get("puzzle_type")
+            state.solution = data.get("analysis_summary", {}).get("solution")
+
+            # Set insights and transformations
+            state.insights = data.get("insights", [])
+            state.transformations = data.get("transformations", [])
+
+            # Set analyzers used
+            state.analyzers_used = set(data.get("analysis_summary", {}).get("analyzers_used", []))
+
+            # Set related files, clues, and patterns
+            state.related_files = data.get("related_files", {})
+            state.clues = data.get("clues", [])
+            state.patterns = data.get("patterns", [])
+
+            # Set puzzle text if available
+            puzzle_text = data.get("content_samples", {}).get("puzzle_text_preview")
+            if puzzle_text:
+                state.puzzle_text = puzzle_text
+
+            # Try to load the original file to get binary data if needed
+            if not state.puzzle_text:
+                try:
+                    with open(puzzle_path, "rb") as f:
+                        content = f.read()
+                    if state.is_binary():
+                        state.set_binary_data(content)
+                    else:
+                        state.set_puzzle_text(content.decode("utf-8", errors="replace"))
+                except Exception as e:
+                    self.logger.error(f"Failed to load original file: {e}")
+
+            self.logger.info(f"Successfully loaded previous state with {len(state.insights)} insights and {len(state.transformations)} transformations")
+            return state
+
+        except Exception as e:
+            self.logger.error(f"Failed to load previous state: {e}")
+            return None
+
     def _setup_directories(self):
         """Set up all necessary directories"""
         directories = [
@@ -46,7 +126,7 @@ class EnhancedStateSaver:
 
         for directory in directories:
             try:
-                directory.mkdir(exist_ok=True)
+                directory.mkdir(parents=True, exist_ok=True)
             except Exception as e:
                 self.logger.error(f"Failed to create directory {directory}: {e}")
 
@@ -488,7 +568,7 @@ class EnhancedStateSaver:
         saved_files = {}
         try:
             stego_dir = self.output_dir / "steganography" / base_name
-            stego_dir.mkdir(exist_ok=True)
+            stego_dir.mkdir(parents=True, exist_ok=True)
 
             # Find steganographic transformations
             stego_transformations = [t for t in state.transformations
@@ -543,7 +623,7 @@ class EnhancedStateSaver:
         saved_files = {}
         try:
             binary_dir = self.output_dir / "binary_data" / base_name
-            binary_dir.mkdir(exist_ok=True)
+            binary_dir.mkdir(parents=True, exist_ok=True)
 
             # Save original binary data if available
             if state.binary_data:
@@ -620,7 +700,7 @@ class EnhancedStateSaver:
         saved_files = {}
         try:
             keys_dir = self.output_dir / "potential_keys" / base_name
-            keys_dir.mkdir(exist_ok=True)
+            keys_dir.mkdir(parents=True, exist_ok=True)
 
             # Look for various types of potential keys
             potential_keys = []
@@ -807,7 +887,7 @@ class EnhancedStateSaver:
         saved_files = {}
         try:
             transform_dir = self.output_dir / "extracted_data" / base_name
-            transform_dir.mkdir(exist_ok=True)
+            transform_dir.mkdir(parents=True, exist_ok=True)
 
             for i, transform in enumerate(state.transformations):
                 safe_name = self._make_safe_filename(transform['name'])

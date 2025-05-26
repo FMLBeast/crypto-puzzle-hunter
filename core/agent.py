@@ -5,6 +5,7 @@ Handles the interaction with LLM providers and coordinates the analysis.
 import os
 import json
 import textwrap
+import time
 from typing import List, Dict, Optional, Any, Union
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableSequence
@@ -47,6 +48,13 @@ class CryptoAgent:
         self.verbose = verbose
         self.chat_history = []
         self.fallback_mode = False
+
+        # For real-time LLM feedback
+        self.realtime_findings = []
+
+        # Register callback with solution logger
+        from core.logger import solution_logger
+        solution_logger.register_llm_feedback_callback(self._handle_realtime_finding)
 
         # Check environment variables for API keys
         if not self.api_key:
@@ -310,6 +318,80 @@ class CryptoAgent:
         """
         return FALLBACK_DIRECT_SOLUTION_TEXT
 
+    def _handle_realtime_finding(self, finding_type: str, analyzer: str, content: str) -> None:
+        """
+        Handle a real-time finding from an analyzer.
+
+        Args:
+            finding_type: Type of finding (insight or transformation)
+            analyzer: Name of the analyzer that generated the finding
+            content: Content of the finding
+        """
+        # Add to the list of real-time findings
+        self.realtime_findings.append({
+            "type": finding_type,
+            "analyzer": analyzer,
+            "content": content,
+            "time": time.strftime("%H:%M:%S")
+        })
+
+        # Send to LLM if we're not in fallback mode
+        if not self.fallback_mode and self.llm:
+            self._send_realtime_findings_to_llm()
+
+    def _send_realtime_findings_to_llm(self) -> None:
+        """
+        Send real-time findings to the LLM.
+        """
+        if not self.realtime_findings:
+            return
+
+        # Prepare the prompt with the real-time findings
+        findings_text = "\n\n".join([
+            f"[{finding['time']}] {finding['analyzer']} ({finding['type']}): {finding['content']}"
+            for finding in self.realtime_findings
+        ])
+
+        prompt = f"""
+        The following findings have been discovered during the analysis process:
+
+        {findings_text}
+
+        Please keep these findings in mind as you continue to analyze the puzzle.
+        No response is needed at this time - this is just to keep you informed of the ongoing analysis.
+        """
+
+        # Send to LLM without expecting a response
+        try:
+            self._send_to_llm_without_response(prompt)
+            # Clear the list of real-time findings
+            self.realtime_findings = []
+        except Exception as e:
+            print(f"Error sending real-time findings to LLM: {e}")
+
+    def _send_to_llm_without_response(self, prompt: str) -> None:
+        """
+        Send a prompt to the LLM without expecting a response.
+
+        Args:
+            prompt: Text prompt to send
+        """
+        if self.fallback_mode or not self.llm:
+            return
+
+        try:
+            # Just invoke the LLM without processing the response
+            self.llm.invoke(prompt)
+        except Exception as e:
+            error_str = str(e)
+            print(f"Error sending to LLM: {error_str}")
+
+            # Check for quota exceeded or rate limit errors
+            if "429" in error_str or "rate limit" in error_str.lower() or "quota" in error_str.lower():
+                print("API quota exceeded or rate limit reached. Disabling real-time feedback.")
+                # Don't set fallback_mode to True, just disable real-time feedback
+                self.realtime_findings = []
+
     def _send_to_llm(self, prompt):
         """
         Safely send a prompt to the LLM.
@@ -367,6 +449,9 @@ class CryptoAgent:
         The LLM acts as the central orchestrator, making decisions at each step
         and steering the entire analysis process with continuous feedback loops.
 
+        Findings from analyzers are fed back to the LLM in real-time to provide
+        continuous feedback during the analysis process.
+
         Args:
             state: The current puzzle state
             max_iterations: Maximum number of analysis iterations
@@ -374,6 +459,8 @@ class CryptoAgent:
         Returns:
             Updated puzzle state
         """
+        # Import solution_logger for accessing pending findings
+        from core.logger import solution_logger
         # Import user interaction module
         try:
             from core.user_interaction import (
@@ -538,6 +625,7 @@ class CryptoAgent:
 
                     Available analyzers (ONLY use analyzers from this list):
                     - text_analyzer: For analyzing text patterns and encodings
+                    - text_pattern_analyzer: For advanced pattern recognition in text
                     - binary_analyzer: For analyzing binary data
                     - image_analyzer: For analyzing images (steganography)
                     - cipher_analyzer: For detecting and solving classical ciphers
@@ -700,6 +788,7 @@ class CryptoAgent:
 
                     Available analyzers (ONLY use analyzers from this list):
                     - text_analyzer: For analyzing text patterns and encodings
+                    - text_pattern_analyzer: For advanced pattern recognition in text
                     - binary_analyzer: For analyzing binary data
                     - image_analyzer: For analyzing images (steganography)
                     - cipher_analyzer: For detecting and solving classical ciphers
@@ -906,6 +995,7 @@ class CryptoAgent:
 
                             Available analyzers (ONLY use analyzers from this list):
                             - text_analyzer: For analyzing text patterns and encodings
+                            - text_pattern_analyzer: For advanced pattern recognition in text
                             - binary_analyzer: For analyzing binary data
                             - image_analyzer: For analyzing images (steganography)
                             - cipher_analyzer: For detecting and solving classical ciphers

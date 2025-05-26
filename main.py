@@ -42,6 +42,7 @@ def parse_arguments():
     parser.add_argument("--model", type=str, help="Specific model to use with provider")
     parser.add_argument("--api-key", type=str, help="API key for the LLM provider")
     parser.add_argument("--analyzer", type=str, help="Use a specific analyzer")
+    parser.add_argument("--last-results", action="store_true", help="Read the last run results")
 
     return parser.parse_args()
 
@@ -157,8 +158,21 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
     Returns:
         Final state of the puzzle analysis
     """
-    # Create a state object that will hold all files
-    state = State()
+    # Check if we have a previous state to resume from
+    try:
+        from core.enhanced_state_saver import enhanced_saver
+        previous_state = enhanced_saver.load_state(str(folder_path))
+
+        if previous_state:
+            console.print(f"[bold green]Found previous progress for {folder_path}. Resuming...[/bold green]")
+            state = previous_state
+        else:
+            # Create new state
+            state = State()
+    except Exception as e:
+        console.print(f"[yellow]Error loading previous state: {e}. Starting fresh.[/yellow]")
+        # Create new state
+        state = State()
 
     # Load all files in the folder
     folder_path = Path(folder_path)
@@ -229,8 +243,36 @@ def process_all_files_in_folder(folder_path, agent, output_dir="./output", itera
         if file_ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']:
             console.print(f"[bold]Found image file: {filename}[/bold]")
             # Set binary data for image files to enable image analyzers
-            state.set_binary_data(file_info["content"])
-            break
+            if "content" in file_info:
+                state.set_binary_data(file_info["content"])
+                break
+            else:
+                # Try to load the file from disk
+                try:
+                    file_path = os.path.join(folder_path, filename)
+                    if os.path.exists(file_path):
+                        with open(file_path, "rb") as f:
+                            content = f.read()
+                            # Update the file_info with the content
+                            file_info["content"] = content
+                            state.set_binary_data(content)
+                            console.print(f"[green]Loaded content for {filename} from disk[/green]")
+                            break
+                    else:
+                        # Try to load from output directory
+                        output_file_path = os.path.join("output", filename)
+                        if os.path.exists(output_file_path):
+                            with open(output_file_path, "rb") as f:
+                                content = f.read()
+                                # Update the file_info with the content
+                                file_info["content"] = content
+                                state.set_binary_data(content)
+                                console.print(f"[green]Loaded content for {filename} from output directory[/green]")
+                                break
+                        else:
+                            console.print(f"[yellow]Warning: Could not find file {filename} on disk[/yellow]")
+                except Exception as e:
+                    console.print(f"[red]Error loading file {filename}: {e}[/red]")
 
     # Check for clues if enabled
     if use_clues:
@@ -393,8 +435,21 @@ def process_puzzle(puzzle_path, agent, output_dir="./output", iterations=15, res
         with open(path, "rb") as f:
             content = f.read()
 
-        # Create state
-        state = State(puzzle_file=path.name)
+        # Check if we have a previous state to resume from
+        try:
+            from core.enhanced_state_saver import enhanced_saver
+            previous_state = enhanced_saver.load_state(str(path))
+
+            if previous_state:
+                console.print(f"[bold green]Found previous progress for {path.name}. Resuming...[/bold green]")
+                state = previous_state
+            else:
+                # Create new state
+                state = State(puzzle_file=path.name)
+        except Exception as e:
+            console.print(f"[yellow]Error loading previous state: {e}. Starting fresh.[/yellow]")
+            # Create new state
+            state = State(puzzle_file=path.name)
 
         # Set content based on file type
         if state.is_binary():
@@ -742,8 +797,141 @@ def browse_puzzle_collection(puzzles_dir, agent, results_dir, use_clues=False, v
 
 def interactive_mode(agent):
     """Run in interactive mode."""
-    # (No changes needed here)
-    # ...
+    from ui.interactive import start_interactive_session
+    console.print("[bold cyan]Starting interactive mode...[/bold cyan]")
+    start_interactive_session(agent)
+    return 0
+
+
+def read_last_results(results_dir="./results"):
+    """
+    Read and display the most recent results file.
+
+    Args:
+        results_dir: Directory containing results files
+
+    Returns:
+        Exit code (0 for success, non-zero for failure)
+    """
+    try:
+        results_path = Path(results_dir)
+
+        # Find all results files
+        result_files = list(results_path.glob("*_results.json"))
+
+        if not result_files:
+            console.print("[bold red]No results files found.[/bold red]")
+            return 1
+
+        # Sort by modification time (most recent first)
+        result_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        latest_result = result_files[0]
+
+        console.print(f"[bold cyan]Reading most recent results: {latest_result.name}[/bold cyan]")
+
+        # Load the JSON data
+        with open(latest_result, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # Display results in a structured format
+        console.print("\n[bold cyan]═════════════════════════════════════════[/bold cyan]")
+        console.print("[bold cyan]           LAST RUN RESULTS            [/bold cyan]")
+        console.print("[bold cyan]═════════════════════════════════════════[/bold cyan]\n")
+
+        # Display metadata in a panel
+        metadata = data.get("metadata", {})
+        puzzle_info = data.get("puzzle_info", {})
+        analysis_summary = data.get("analysis_summary", {})
+
+        metadata_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
+        metadata_table.add_column("Property", style="cyan")
+        metadata_table.add_column("Value", style="green")
+
+        metadata_table.add_row("Timestamp", metadata.get("timestamp", "Unknown"))
+        metadata_table.add_row("Version", metadata.get("crypto_hunter_version", "Unknown"))
+        metadata_table.add_row("Duration", metadata.get("analysis_duration", "Unknown"))
+        metadata_table.add_row("Puzzle File", puzzle_info.get("puzzle_file", "Unknown"))
+        metadata_table.add_row("File Type", puzzle_info.get("file_type", "Unknown"))
+        metadata_table.add_row("File Size", f"{puzzle_info.get('file_size', 'Unknown')} bytes")
+
+        status_style = "green" if analysis_summary.get("solution") else "yellow"
+        status_text = "Solved" if analysis_summary.get("solution") else analysis_summary.get("status", "Unknown")
+        metadata_table.add_row("Status", f"[{status_style}]{status_text}[/{status_style}]")
+
+        if analysis_summary.get("solution"):
+            metadata_table.add_row("Solution", f"[bold green]{analysis_summary.get('solution')}[/bold green]")
+
+        console.print(Panel(metadata_table, title="[bold]Analysis Information[/bold]", border_style="blue"))
+
+        # Display summary statistics
+        summary_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
+        summary_table.add_column("Statistic", style="cyan")
+        summary_table.add_column("Count", style="green")
+
+        summary_table.add_row("Insights", str(analysis_summary.get("insights_count", 0)))
+        summary_table.add_row("Transformations", str(analysis_summary.get("transformations_count", 0)))
+        summary_table.add_row("Analyzers Used", str(len(analysis_summary.get("analyzers_used", []))))
+        summary_table.add_row("Related Files", str(analysis_summary.get("related_files_count", 0)))
+        summary_table.add_row("Clues", str(analysis_summary.get("clues_count", 0)))
+        summary_table.add_row("Patterns", str(analysis_summary.get("patterns_count", 0)))
+        summary_table.add_row("High Confidence Extractions", str(analysis_summary.get("high_confidence_extractions", 0)))
+
+        console.print(Panel(summary_table, title="[bold]Analysis Summary[/bold]", border_style="blue"))
+
+        # Display insights
+        insights = data.get("insights", [])
+        if insights:
+            insights_table = Table(show_header=True, header_style="bold magenta", box=box.SIMPLE_HEAD)
+            insights_table.add_column("Time", style="dim")
+            insights_table.add_column("Analyzer", style="cyan")
+            insights_table.add_column("Insight", style="green", no_wrap=False)
+
+            # Show the last 10 insights
+            for insight in insights[-10:]:
+                insights_table.add_row(
+                    insight.get("time", ""),
+                    insight.get("analyzer", ""),
+                    insight.get("text", "")
+                )
+
+            console.print(Panel(insights_table, title=f"[bold]Recent Insights (showing {min(10, len(insights))} of {len(insights)})[/bold]", border_style="blue"))
+
+        # Ask if user wants to see more details
+        more_details = Prompt.ask(
+            "Would you like to see more details?",
+            choices=["y", "n"],
+            default="n"
+        )
+
+        if more_details.lower() == "y":
+            # Display transformations
+            transformations = data.get("transformations", [])
+            if transformations:
+                console.print("\n[bold cyan]Transformations:[/bold cyan]")
+                for i, transform in enumerate(transformations[:5], 1):  # Show first 5
+                    console.print(f"[bold]{i}. {transform.get('name', 'Unknown')}[/bold]")
+                    console.print(f"   Description: {transform.get('description', 'Unknown')}")
+                    console.print(f"   Analyzer: {transform.get('analyzer', 'Unknown')}")
+                    console.print(f"   Output: {str(transform.get('output_data', ''))[:100]}...")
+                    console.print()
+
+            # Display all insights if requested
+            all_insights = Prompt.ask(
+                "Would you like to see all insights?",
+                choices=["y", "n"],
+                default="n"
+            )
+
+            if all_insights.lower() == "y":
+                console.print("\n[bold cyan]All Insights:[/bold cyan]")
+                for i, insight in enumerate(insights, 1):
+                    console.print(f"[dim]{i}.[/dim] [{insight.get('time', '')}] [cyan]{insight.get('analyzer', '')}:[/cyan] {insight.get('text', '')}")
+
+        return 0
+
+    except Exception as e:
+        console.print(f"[bold red]Error reading results: {e}[/bold red]")
+        return 1
 
 
 def main():
@@ -756,6 +944,10 @@ def main():
 
     # Set up the environment
     setup_environment(args)
+
+    # Check if we should read the last results
+    if args.last_results:
+        return read_last_results(args.results_dir)
 
     # Enter interactive or browsing mode if no puzzle file is provided
     mode = None
