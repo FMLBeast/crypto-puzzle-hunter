@@ -52,7 +52,7 @@ class WebUIManager:
         
         @self.app.get("/", response_class=HTMLResponse)
         async def dashboard(request: Request):
-            return self.templates.TemplateResponse("dashboard.html", {"request": request})
+            return self.templates.TemplateResponse("dashboard.css.html", {"request": request})
         
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):

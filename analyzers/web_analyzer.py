@@ -7,7 +7,7 @@ import re
 import logging
 from typing import Dict, Any, Optional, List
 from core.state import State
-from core.web_agent import WebAgent
+from agents.web_agent import WebAgent
 from analyzers.base import register_analyzer, analyzer_compatibility
 
 # Configure logging

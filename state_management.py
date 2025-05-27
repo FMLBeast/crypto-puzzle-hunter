@@ -1,4 +1,4 @@
-# enhanced_state_management.py
+# state_management.py
 import logging
 from enum import Enum, auto
 from pathlib import Path

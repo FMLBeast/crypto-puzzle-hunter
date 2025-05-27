@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-enhanced_orchestrator.py
+orchestrator.py
 
 Central glue for Crypto Puzzle Hunter:
   • Manages WorkflowState
@@ -19,7 +19,7 @@ import inspect
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from enhanced_state_management import WorkflowState
+from state_management import WorkflowState
 from task_factory import TaskFactory
 
 logger = logging.getLogger(__name__)

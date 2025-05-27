@@ -17,9 +17,9 @@ import json
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from enhanced_orchestrator import EnhancedOrchestrator
+from orchestrator import EnhancedOrchestrator
 from dashboard_system import AnalysisDashboard
-from agents.agent import CryptoAgent
+from core.agent import CryptoAgent
 from core.enhanced_state_saver import EnhancedStateSaver
 from rich.console import Console
 from rich.panel import Panel
