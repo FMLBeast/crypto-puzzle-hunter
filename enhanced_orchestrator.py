@@ -1,138 +1,145 @@
-# enhanced_orchestrator.py
-import logging
-import time
-import os
-from pathlib import Path
-from typing import Optional
+#!/usr/bin/env python3
+"""
+enhanced_orchestrator.py
 
-from enhanced_state_management import (
-    WorkflowState, TaskStatus, AnalysisPhase, Task
-)
-from core.agent             import CryptoAgent
-from core.code_agent        import CodeAgent
-from core.vision_agent      import VisionAgent
-from core.web_agent         import WebAgent
-from core.wallet_verifier_agent import WalletVerifierAgent
-from core.vm_agent          import VMAgent
-from core.pgp_agent         import PGPAgent
-from task_factory           import TaskFactory
+Central glue for Crypto Puzzle Hunter:
+  • Manages WorkflowState
+  • Runs FileHeader, TextExtractor, PrivateKeyConstructor,
+    WalletVerifier, VM, PGP agents up front
+  • Uses TaskFactory to generate analysis tasks
+  • Loops through tasks, dispatching to analyzers & agents
+  • Persists & logs every insight/finding/solution
+"""
+import os
+import json
+import time
+import logging
+
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from enhanced_state_management import WorkflowState
+from task_factory               import TaskFactory
+
+from core.agent                      import CryptoAgent
+from core.code_agent                 import CodeAgent
+from core.vision_agent               import VisionAgent
+from core.web_agent                  import WebAgent
+from core.wallet_verifier_agent      import WalletVerifierAgent
+from core.vm_agent                   import VMAgent
+from core.pgp_agent                  import PGPAgent
+from core.fileheader_agent           import FileHeaderAgent
+from core.text_extractor_agent       import TextExtractorAgent
+from core.private_key_constructor_agent import PrivateKeyConstructorAgent
 
 logger = logging.getLogger(__name__)
-
 
 class EnhancedOrchestrator:
     def __init__(
         self,
-        provider: str = "openai",
-        api_key:  Optional[str] = None,
-        model:    Optional[str] = None,
-        verbose:  bool = False
+        provider: str             = "openai",
+        api_key:  str             = None,
+        model:    str             = None,
+        verbose:  bool            = False
     ):
-        logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO)
+        # logging is already configured by main.py
         logger.info("🔧 Initializing EnhancedOrchestrator")
 
-        # Core state
+        # 1) Core state
         self.state = WorkflowState()
 
-        # LLM‐driven analysis
-        self.crypto_agent = CryptoAgent(provider, api_key, model, verbose)
+        # 2) Agents
+        self.crypto_agent         = CryptoAgent(provider, api_key, model, verbose)
+        self.code_agent           = CodeAgent(verbose=verbose)
+        self.vision_agent         = VisionAgent(verbose=verbose)
+        self.web_agent            = WebAgent(verbose=verbose)
+        self.wallet_verifier_agent = WalletVerifierAgent(verbose=verbose)
+        self.vm_agent             = VMAgent(verbose=verbose)
+        self.pgp_agent            = PGPAgent(verbose=verbose)
+        self.fileheader_agent     = FileHeaderAgent(verbose=verbose)
+        self.text_extractor_agent = TextExtractorAgent(verbose=verbose)
+        self.pk_constructor_agent = PrivateKeyConstructorAgent(verbose=verbose)
 
-        # Code + dynamic tooling
-        self.code_agent = CodeAgent(verbose=verbose)
-
-        # Other specialized agents
-        self.vision_agent           = VisionAgent(verbose=verbose)
-        self.web_agent              = WebAgent(verbose=verbose)
-        self.wallet_verifier_agent  = WalletVerifierAgent(verbose=verbose)
-        self.vm_agent               = VMAgent(verbose=verbose)
-        self.pgp_agent              = PGPAgent(verbose=verbose)
-
-        # Task factory (builds your Task objects)
+        # 3) Task factory (needs state)
         self.factory = TaskFactory(self.state)
 
-    def run(self, puzzle_path: str):
+    def run(self, puzzle_path: str, timeout_minutes: int = 60):
         """
-        Main entrypoint:
-        1) register the root material
-        2) generate initial tasks
-        3) loop until completion or solution found
+        1) Load root material
+        2) Run all “pre-analysis” agents on it
+        3) Generate initial tasks and loop until solution or timeout
         """
-        logger.info(f"📁 Loading puzzle from {puzzle_path}")
-        root_material = self.state.add_material(puzzle_path)
+        logger.info(f"📁 Loading puzzle: {puzzle_path}")
+        root = self.state.add_material(puzzle_path)
 
-        # Initial discovery tasks
-        init_tasks = self.factory.generate_initial_tasks(root_material)
+        # 3a) Pre-analysis: extract files, text, keys, wallets, VM, PGP
+        for agent in (
+            self.fileheader_agent,
+            self.text_extractor_agent,
+            self.pk_constructor_agent,
+            self.wallet_verifier_agent,
+            self.vm_agent,
+            self.pgp_agent
+        ):
+            self.state = agent.run(self.state)
+
+        # 3b) Initial tasks
+        init_tasks = self.factory.generate_initial_tasks(root)
         for t in init_tasks:
             self.state.add_task(t)
 
-        # Main execution loop
-        while not self.state.is_complete():
-            task = self.state.get_next_task()
-            if not task:
-                break
+        # 4) Main execution loop
+        deadline = datetime.now() + timedelta(minutes=timeout_minutes)
+        with ThreadPoolExecutor() as pool:
+            futures = {}
+            while not self.state.solution and datetime.now() < deadline:
+                task = self.state.get_next_task()
+                if not task:
+                    break
 
-            try:
-                logger.info(f"▶ Running task {task.id} ({task.analyzer})")
-                self._execute_task(task)
-                self.state.complete_task(task)
-            except Exception as e:
-                logger.error(f"❌ Task {task.id} failed: {e}")
-                self.state.fail_task(task, str(e))
+                # dispatch
+                futures[pool.submit(self._execute_task, task)] = task
 
-            # brief pause & logging
-            time.sleep(0.1)
+                # collect immediately to maintain order
+                for fut in as_completed(list(futures)):
+                    t = futures.pop(fut)
+                    try:
+                        fut.result()
+                        self.state.complete_task(t)
+                    except Exception as e:
+                        self.state.fail_task(t, str(e))
 
-        # Final direct solution attempt if needed
+                time.sleep(0.1)
+
+        # 5) Final LLM‐direct solution if still missing
         if not self.state.solution:
-            logger.info("🎯 Attempting final direct solution via LLM")
             sol = self.crypto_agent.attempt_direct(self.state)
             if sol:
                 self.state.set_solution(sol)
 
-        # Report
+        # 6) Summary
         logger.info("✅ Analysis complete")
         print("\n=== FINAL SUMMARY ===")
         print(self.state.get_summary())
         if self.state.solution:
             print("Solution:", self.state.solution)
-        else:
-            print("No solution found.")
 
-
-    def _execute_task(self, task: Task):
+    def _execute_task(self, task):
         """
-        Dispatches each task to the appropriate agent.
+        Map each Task.analyzer to its handler.
         """
-        # map analyzer names to methods
-        a = task.analyzer
-        if a.startswith("binary_") or a == "binary_analyzer":
-            from analyzers.binary_analyzer import analyze as f; f(self.state, task)
-        elif a == "text_analyzer":
-            from analyzers.text_analyzer import analyze as f; f(self.state, task)
-        elif a == "encoding_analyzer":
-            from analyzers.encoding_analyzer import analyze_encodings as f; f(self.state)
-        elif a == "cipher_analyzer":
-            from analyzers.cipher_analyzer import analyze as f; f(self.state)
-        elif a == "image_analyzer":
-            from analyzers.image_analyzer import analyze as f; f(self.state, task)
-        elif a == "vision_analyzer":
-            self.vision_agent.analyze(task, self.state)
-        elif a == "web_analyzer":
-            self.web_agent.search(task, self.state)
-        elif a == "crypto_analyzer":
-            # fallback crypto tools via code agent
-            self.code_agent.analyze_crypto(self.state, task)
-        elif a == "wallet_verifier":
-            self.wallet_verifier_agent.verify(task, self.state)
-        elif a == "vm_executor":
-            self.vm_agent.execute(task, self.state)
-        elif a == "pgp_agent":
-            self.pgp_agent.decrypt(task, self.state)
+        name = task.analyzer
+        # First check custom agents
+        if name == "vision_analyzer":
+            self.vision_agent.run(self.state)
+        elif name == "web_analyzer":
+            self.web_agent.run(self.state)
+        elif name == "wallet_verifier":
+            self.wallet_verifier_agent.run(self.state)
+        elif name == "vm_executor":
+            self.vm_agent.run(self.state)
+        elif name == "pgp_agent":
+            self.pgp_agent.run(self.state)
         else:
-            # Catch any custom analyzers
-            from analyzers import get_analyzer
-            fn = get_analyzer(a)
-            if fn:
-                fn(self.state)
-            else:
-                raise RuntimeError(f"No handler for analyzer {a}")
+            # Fallback to CryptoAgent orchestrating analyzers
+            self.crypto_agent.run_analyzer(name, self.state)

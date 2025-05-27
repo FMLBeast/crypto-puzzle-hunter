@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crypto Hunter Dashboard</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="/static/dashboard.css" rel="stylesheet">
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-shield-alt"></i>
+                    <h1>Crypto Hunter</h1>
+                </div>
+                <div class="status-bar">
+                    <div class="connection-status" id="connectionStatus">
+                        <i class="fas fa-circle"></i>
+                        <span>Connecting...</span>
+                    </div>
+                    <div class="analysis-status" id="analysisStatus">
+                        <i class="fas fa-play-circle"></i>
+                        <span>Ready</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Left Panel - Overview -->
+            <section class="panel overview-panel">
+                <div class="panel-header">
+                    <h2><i class="fas fa-tachometer-alt"></i> Analysis Overview</h2>
+                </div>
+                <div class="panel-content">
+                    <!-- Puzzle Info -->
+                    <div class="puzzle-info" id="puzzleInfo">
+                        <div class="info-item">
+                            <label>Puzzle:</label>
+                            <span id="puzzlePath">No puzzle loaded</span>
+                        </div>
+                        <div class="info-item">
+                            <label>Started:</label>
+                            <span id="startTime">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>Duration:</label>
+                            <span id="duration">-</span>
+                        </div>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="progress-section">
+                        <div class="progress-header">
+                            <span>Progress</span>
+                            <span id="progressPercent">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                        </div>
+                        <div class="phase-indicator" id="phaseIndicator">Initializing...</div>
+                    </div>
+
+                    <!-- Stats Grid -->
+                    <div class="stats-grid">
+                        <div class="stat-card insights">
+                            <div class="stat-icon"><i class="fas fa-lightbulb"></i></div>
+                            <div class="stat-content">
+                                <div class="stat-value" id="insightsCount">0</div>
+                                <div class="stat-label">Insights</div>
+                            </div>
+                        </div>
+                        <div class="stat-card transformations">
+                            <div class="stat-icon"><i class="fas fa-exchange-alt"></i></div>
+                            <div class="stat-content">
+                                <div class="stat-value" id="transformationsCount">0</div>
+                                <div class="stat-label">Transformations</div>
+                            </div>
+                        </div>
+                        <div class="stat-card analyzers-success">
+                            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+                            <div class="stat-content">
+                                <div class="stat-value" id="successfulAnalyzers">0</div>
+                                <div class="stat-label">Successful</div>
+                            </div>
+                        </div>
+                        <div class="stat-card analyzers-failed">
+                            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
+                            <div class="stat-content">
+                                <div class="stat-value" id="failedAnalyzers">0</div>
+                                <div class="stat-label">Failed</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Current Analyzer -->
+                    <div class="current-analyzer" id="currentAnalyzer" style="display: none;">
+                        <div class="analyzer-header">
+                            <i class="fas fa-cog fa-spin"></i>
+                            <span>Running Analyzer</span>
+                        </div>
+                        <div class="analyzer-name" id="currentAnalyzerName">-</div>
+                    </div>
+
+                    <!-- Solution Panel -->
+                    <div class="solution-panel" id="solutionPanel" style="display: none;">
+                        <div class="solution-header">
+                            <i class="fas fa-trophy"></i>
+                            <span>Solution Found!</span>
+                        </div>
+                        <div class="solution-content" id="solutionContent">-</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Center Panel - Analysis Pipeline -->
+            <section class="panel pipeline-panel">
+                <div class="panel-header">
+                    <h2><i class="fas fa-project-diagram"></i> Analysis Pipeline</h2>
+                </div>
+                <div class="panel-content">
+                    <div class="pipeline-container" id="pipelineContainer">
+                        <!-- Pipeline stages will be populated by JavaScript -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel - Live Feed -->
+            <section class="panel feed-panel">
+                <div class="panel-header">
+                    <h2><i class="fas fa-stream"></i> Live Analysis Feed</h2>
+                    <div class="feed-controls">
+                        <button class="feed-toggle" id="autoScroll" title="Auto-scroll">
+                            <i class="fas fa-arrow-down"></i>
+                        </button>
+                        <button class="feed-toggle" id="clearFeed" title="Clear feed">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="panel-content">
+                    <div class="feed-container" id="feedContainer">
+                        <div class="feed-empty">
+                            <i class="fas fa-hourglass-start"></i>
+                            <p>Waiting for analysis to begin...</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom Panel - Detailed Results -->
+        <section class="bottom-panel">
+            <div class="tabs-container">
+                <div class="tabs-header">
+                    <button class="tab-button active" data-tab="insights">
+                        <i class="fas fa-lightbulb"></i> Insights
+                    </button>
+                    <button class="tab-button" data-tab="transformations">
+                        <i class="fas fa-exchange-alt"></i> Transformations
+                    </button>
+                    <button class="tab-button" data-tab="analyzers">
+                        <i class="fas fa-cogs"></i> Analyzers
+                    </button>
+                </div>
+                <div class="tabs-content">
+                    <!-- Insights Tab -->
+                    <div class="tab-panel active" id="insightsTab">
+                        <div class="insights-container" id="insightsContainer">
+                            <div class="empty-state">
+                                <i class="fas fa-lightbulb"></i>
+                                <p>No insights yet. Analysis will begin soon...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Transformations Tab -->
+                    <div class="tab-panel" id="transformationsTab">
+                        <div class="transformations-container" id="transformationsContainer">
+                            <div class="empty-state">
+                                <i class="fas fa-exchange-alt"></i>
+                                <p>No transformations yet. Analysis will begin soon...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Analyzers Tab -->
+                    <div class="tab-panel" id="analyzersTab">
+                        <div class="analyzers-container" id="analyzersContainer">
+                            <div class="empty-state">
+                                <i class="fas fa-cogs"></i>
+                                <p>No analyzers run yet. Analysis will begin soon...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Notification Container -->
+    <div class="notifications" id="notifications"></div>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

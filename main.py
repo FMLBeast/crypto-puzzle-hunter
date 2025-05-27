@@ -6,77 +6,44 @@ import argparse
 import logging
 import os
 
+from dotenv import load_dotenv
+load_dotenv()  # loads OPENAI_API_KEY, ANTHROPIC_API_KEY, etc from .env
+
 from enhanced_orchestrator import EnhancedOrchestrator
-from core.agent         import CryptoAgent
-from core.code_agent    import CodeAgent
-from core.vision_agent  import VisionAgent
-from core.web_agent     import WebAgent
 
 def parse_args():
     p = argparse.ArgumentParser("Crypto Puzzle Hunter")
-    p.add_argument("puzzle_file", help="Path to puzzle (binary or text)")
+    p.add_argument("puzzle_path", help="Path to puzzle file (binary, image, etc.)")
     p.add_argument("--provider",
-                   choices=["openai","anthropic"],
+                   choices=["openai", "anthropic", "local"],
                    default="openai",
-                   help="Primary LLM provider")
-    p.add_argument("--model",    help="LLM model name (e.g. gpt-4o-2024-05-13)")
-    p.add_argument("--jobs",     type=int, default=4,   help="Parallel analyzers")
-    p.add_argument("--iterations",
-                   type=int, default=100,
-                   help="Max AI iterations")
-    p.add_argument("--timeout",
-                   type=int, default=60,
-                   help="Timeout in minutes")
+                   help="LLM provider")
+    p.add_argument("--model",
+                   help="Model name (e.g. gpt-4o-2024-05-13 or claude-3.5-sonnet)")
     p.add_argument("--verbose",
                    action="store_true",
-                   help="Verbose logging")
+                   help="Enable debug logging")
     return p.parse_args()
 
-def setup_logging(verbose: bool, puzzle_file: str):
-    root = logging.getLogger()
+def setup_logging(verbose: bool):
     level = logging.DEBUG if verbose else logging.INFO
-    root.setLevel(level)
-    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter(fmt))
-    root.addHandler(ch)
-    base = os.path.splitext(os.path.basename(puzzle_file))[0]
-    fh = logging.FileHandler(f"{base}.log", mode="a")
-    fh.setFormatter(logging.Formatter(fmt))
-    root.addHandler(fh)
+    fmt   = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    logging.basicConfig(level=level, format=fmt)
 
 def main():
     args = parse_args()
-    setup_logging(args.verbose, args.puzzle_file)
+    setup_logging(args.verbose)
 
-    crypto = CryptoAgent(
-        provider=args.provider,
-        api_key=None,
-        model=args.model,
-        verbose=args.verbose
-    )
-    code   = CodeAgent(verbose=args.verbose)
-    vision = VisionAgent(verbose=args.verbose)
-    web    = WebAgent(verbose=args.verbose)
-
-    state_file = os.path.splitext(args.puzzle_file)[0] + ".state.json"
     orch = EnhancedOrchestrator(
-        puzzle_file=args.puzzle_file,
-        crypto_agent=crypto,
-        code_agent=code,
-        vision_agent=vision,
-        web_agent=web,
-        state_file=state_file,
-        max_workers=args.jobs,
-        llm_interval=5,
-        verbose=args.verbose
+        provider=args.provider,
+        api_key  = os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
+        model    = args.model,
+        verbose  = args.verbose
     )
 
-    solved = orch.run(
-        max_iterations=args.iterations,
-        timeout_minutes=args.timeout
-    )
-    print("🎉 Puzzle solved!" if solved else "❌ No solution found.")
+    # run the workflow on the puzzle file
+    orch.run(args.puzzle_path)
+
 
 if __name__ == "__main__":
     main()
