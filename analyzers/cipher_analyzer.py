@@ -1028,3 +1028,6 @@ def score_english_text(text: str) -> float:
     combined_score = 0.5 * freq_score + 0.3 * word_score + 0.2 * vowel_score
 
     return combined_score
+
+
+analyze = analyze_ciphers

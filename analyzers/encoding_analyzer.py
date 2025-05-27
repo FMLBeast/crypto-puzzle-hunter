@@ -1071,3 +1071,6 @@ def rot13_char(c: str) -> str:
             c = c.upper()
     
     return c
+
+# alias entry-point for analyzer registry:
+analyze = analyze_encodings

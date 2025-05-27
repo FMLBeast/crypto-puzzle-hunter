@@ -32,12 +32,15 @@ INFURA_ENDPOINT = f"https://mainnet.infura.io/v3/{config.ETHERSCAN_API_KEY}" if 
 
 
 @register_analyzer("blockchain_analyzer")
-def analyze_blockchain(state: State) -> State:
+@analyzer_compatibility()
+def analyze_blockchain(state: State, hex_strings=None, metadata=None) -> State:
     """
     Main blockchain analyzer function that orchestrates blockchain analysis.
 
     Args:
         state: Current puzzle state
+        hex_strings: Optional hex strings to analyze
+        metadata: Optional metadata for analysis
 
     Returns:
         Updated state after analysis
@@ -75,8 +78,7 @@ def detect_addresses(state: State) -> State:
         if eth_addresses:
             state.add_insight(
                 f"Found {len(eth_addresses)} Ethereum address(es)",
-                analyzer="blockchain_analyzer",
-                data={"addresses": list(eth_addresses)}
+                analyzer="blockchain_analyzer"
             )
 
             # Validate addresses
@@ -94,8 +96,7 @@ def detect_addresses(state: State) -> State:
             if valid_addresses:
                 state.add_insight(
                     f"Validated {len(valid_addresses)} Ethereum address(es)",
-                    analyzer="blockchain_analyzer",
-                    data={"valid_addresses": valid_addresses}
+                    analyzer="blockchain_analyzer"
                 )
 
                 # Add metadata for further analysis
@@ -108,8 +109,7 @@ def detect_addresses(state: State) -> State:
         if btc_addresses:
             state.add_insight(
                 f"Found {len(btc_addresses)} potential Bitcoin address(es)",
-                analyzer="blockchain_analyzer",
-                data={"addresses": list(btc_addresses)}
+                analyzer="blockchain_analyzer"
             )
 
             # Validate addresses
@@ -121,8 +121,7 @@ def detect_addresses(state: State) -> State:
             if valid_addresses:
                 state.add_insight(
                     f"Validated {len(valid_addresses)} Bitcoin address(es)",
-                    analyzer="blockchain_analyzer",
-                    data={"valid_addresses": valid_addresses}
+                    analyzer="blockchain_analyzer"
                 )
 
                 # Add metadata for further analysis
@@ -130,8 +129,8 @@ def detect_addresses(state: State) -> State:
                     state.metadata["btc_addresses"] = valid_addresses
 
     # Check for addresses in binary data
-    if state.puzzle_data:
-        data_str = state.puzzle_data.decode('utf-8', errors='ignore')
+    if state.binary_data:
+        data_str = state.binary_data.decode('utf-8', errors='ignore')
 
         # Ethereum addresses (standard format)
         eth_addresses = set(re.findall(r'0x[a-fA-F0-9]{40}', data_str))
@@ -145,8 +144,7 @@ def detect_addresses(state: State) -> State:
         if eth_addresses:
             state.add_insight(
                 f"Found {len(eth_addresses)} Ethereum address(es) in binary data",
-                analyzer="blockchain_analyzer",
-                data={"addresses": list(eth_addresses)}
+                analyzer="blockchain_analyzer"
             )
 
             # Validate addresses
@@ -170,8 +168,7 @@ def detect_addresses(state: State) -> State:
         if btc_addresses:
             state.add_insight(
                 f"Found {len(btc_addresses)} potential Bitcoin address(es) in binary data",
-                analyzer="blockchain_analyzer",
-                data={"addresses": list(btc_addresses)}
+                analyzer="blockchain_analyzer"
             )
 
             # Validate addresses
@@ -210,8 +207,7 @@ def analyze_ethereum_data(state: State) -> State:
         if tx_data:
             state.add_insight(
                 f"Found transaction data for Ethereum address {address}",
-                analyzer="blockchain_analyzer",
-                data={"address": address, "transaction_count": len(tx_data)}
+                analyzer="blockchain_analyzer"
             )
 
             # Look for interesting transactions
@@ -221,8 +217,7 @@ def analyze_ethereum_data(state: State) -> State:
                 for tx in interesting_txs:
                     state.add_insight(
                         f"Interesting transaction found: {tx['reason']} - {tx['hash']}",
-                        analyzer="blockchain_analyzer",
-                        data={"transaction": tx}
+                        analyzer="blockchain_analyzer"
                     )
 
             # Look for data in transactions
@@ -232,8 +227,7 @@ def analyze_ethereum_data(state: State) -> State:
                 for tx in data_txs:
                     state.add_insight(
                         f"Transaction with data found: {tx['hash']}",
-                        analyzer="blockchain_analyzer",
-                        data={"transaction": tx}
+                        analyzer="blockchain_analyzer"
                     )
 
                     # Try to decode data
@@ -315,8 +309,7 @@ def check_encoded_messages(state: State) -> State:
     if message:
         state.add_insight(
             f"Ethereum addresses may encode a message: {message}",
-            analyzer="blockchain_analyzer",
-            data={"message": message}
+            analyzer="blockchain_analyzer"
         )
 
         state.add_transformation(
@@ -337,8 +330,7 @@ def check_encoded_messages(state: State) -> State:
             if op_return_data:
                 state.add_insight(
                     f"Found OP_RETURN data for Bitcoin address {address}",
-                    analyzer="blockchain_analyzer",
-                    data={"address": address, "op_return": op_return_data}
+                    analyzer="blockchain_analyzer"
                 )
 
                 # Try to decode as ASCII
