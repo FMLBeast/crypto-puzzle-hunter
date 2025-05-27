@@ -1,995 +1,627 @@
 """
-CodeAgent for Crypto Hunter.
-An agent capable of writing and executing its own code to solve puzzles.
+Code Agent Module
+Handles code analysis and execution for crypto puzzles.
 """
 
-import ast
-import importlib
-import inspect
-import json
 import logging
-import os
 import re
-import subprocess
-import sys
-import tempfile
-import time
-import traceback
-import uuid
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
-from core.arweave_tools_main import register_arweave_tools_with_agent
+import ast
+import base64
+import hashlib
+import json
+from typing import List, Dict, Any, Optional
 
-
-class DynamicToolRegistry:
-    """Registry for dynamically created tools."""
-
-    def __init__(self, tools_dir: Union[str, Path]) -> None:
-        """
-        Initialize the tool registry.
-
-        Args:
-            tools_dir: Directory to store dynamically created tools
-        """
-        self.tools_dir = Path(tools_dir)
-        self.tools_dir.mkdir(exist_ok=True)
-
-        self.tools = {}  # tool_id -> tool_function
-        self.tool_metadata = {}  # tool_id -> metadata
-
-        # Load existing tools
-        self._load_existing_tools()
-
-    def _load_existing_tools(self) -> None:
-        """Load existing tools from the tools directory."""
-        for tool_file in self.tools_dir.glob("tool_*.py"):
-            try:
-                tool_id = tool_file.stem
-
-                # Read the file to extract metadata
-                content = tool_file.read_text()
-
-                # Import the module
-                spec = importlib.util.spec_from_file_location(tool_id, tool_file)
-                if spec and spec.loader:
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-
-                    # Look for the main function
-                    if hasattr(module, 'main'):
-                        self.tools[tool_id] = module.main
-
-                        # Extract metadata from docstring or comments
-                        description = ""
-                        if hasattr(module.main, '__doc__') and module.main.__doc__:
-                            description = module.main.__doc__.strip()
-
-                        self.tool_metadata[tool_id] = {
-                            'description': description,
-                            'file_path': str(tool_file),
-                            'created_at': tool_file.stat().st_mtime
-                        }
-
-                        logging.info(f"Loaded tool: {tool_id}")
-
-            except Exception as e:
-                logging.warning(f"Failed to load tool {tool_file}: {e}")
-
-    def register_tool(self, code: str, name: Optional[str] = None, description: str = "") -> Optional[str]:
-        """
-        Register a new tool from code.
-
-        Args:
-            code: Python code for the tool
-            name: Optional name for the tool (extracted from code if not provided)
-            description: Optional description of the tool
-
-        Returns:
-            Tool ID if successful, None otherwise
-        """
-        try:
-            # Generate tool ID
-            tool_id = name or f"tool_{uuid.uuid4().hex[:8]}"
-
-            # Validate the code by parsing it
-            try:
-                ast.parse(code)
-            except SyntaxError as e:
-                logging.error(f"Code syntax error: {e}")
-                return None
-
-            # Wrap the code in a proper function if needed
-            if 'def main(' not in code:
-                # Extract the main logic and wrap it
-                wrapped_code = f'''
-"""
-{description}
-"""
-
-def main(inputs=None):
-    """Main function for the tool."""
-    if inputs is None:
-        inputs = {{}}
-
-    try:
-{self._indent_code(code, 8)}
-
-        return {{"success": True, "result": "Tool executed successfully"}}
-    except Exception as e:
-        return {{"success": False, "error": str(e)}}
-'''
-            else:
-                wrapped_code = f'"""\n{description}\n"""\n\n{code}'
-
-            # Save to file
-            tool_file = self.tools_dir / f"{tool_id}.py"
-            tool_file.write_text(wrapped_code)
-
-            # Import and register
-            spec = importlib.util.spec_from_file_location(tool_id, tool_file)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-
-                if hasattr(module, 'main'):
-                    self.tools[tool_id] = module.main
-                    self.tool_metadata[tool_id] = {
-                        'description': description,
-                        'file_path': str(tool_file),
-                        'created_at': time.time()
-                    }
-
-                    logging.info(f"Registered tool: {tool_id}")
-                    return tool_id
-                else:
-                    logging.error(f"Tool {tool_id} has no main function")
-                    tool_file.unlink()  # Remove invalid file
-                    return None
-
-        except Exception as e:
-            logging.error(f"Failed to register tool: {e}")
-            return None
-
-    def get_tool(self, tool_id: str) -> Optional[Callable]:
-        """Get a tool by ID."""
-        return self.tools.get(tool_id)
-
-    def list_tools(self) -> List[Dict[str, Any]]:
-        """List all registered tools."""
-        return [
-            {
-                'id': tool_id,
-                'description': self.tool_metadata.get(tool_id, {}).get('description', ''),
-                'created_at': self.tool_metadata.get(tool_id, {}).get('created_at', 0)
-            }
-            for tool_id in self.tools.keys()
-        ]
-
-    def remove_tool(self, tool_id: str) -> bool:
-        """Remove a tool by ID."""
-        if tool_id in self.tools:
-            try:
-                # Remove from memory
-                del self.tools[tool_id]
-                if tool_id in self.tool_metadata:
-                    # Remove file if it exists
-                    file_path = self.tool_metadata[tool_id].get('file_path')
-                    if file_path and os.path.exists(file_path):
-                        os.unlink(file_path)
-                    del self.tool_metadata[tool_id]
-                return True
-            except Exception as e:
-                logging.error(f"Failed to remove tool {tool_id}: {e}")
-        return False
-
-    def _indent_code(self, code: str, spaces: int) -> str:
-        """Indent each line of code by the specified number of spaces."""
-        lines = code.split('\n')
-        indented_lines = []
-        for line in lines:
-            if line.strip():  # Don't indent empty lines
-                indented_lines.append(' ' * spaces + line)
-            else:
-                indented_lines.append('')
-        return '\n'.join(indented_lines)
-
-
-class SafeExecutionEnvironment:
-    """
-    Provides a safe environment for executing generated code.
-    """
-
-    def __init__(self, allowed_modules: Optional[List[str]] = None, max_execution_time: int = 30,
-                 memory_limit: int = 100 * 1024 * 1024) -> None:
-        """
-        Initialize the safe execution environment.
-
-        Args:
-            allowed_modules: List of allowed modules (None for default safe set)
-            max_execution_time: Maximum execution time in seconds
-            memory_limit: Memory limit in bytes
-        """
-        self.max_execution_time = max_execution_time
-        self.memory_limit = memory_limit
-
-        # Default safe modules
-        if allowed_modules is None:
-            self.allowed_modules = {
-                'math', 'random', 'string', 'collections', 'itertools',
-                'functools', 'operator', 're', 'json', 'base64',
-                'hashlib', 'hmac', 'urllib.parse', 'binascii',
-                'datetime', 'time', 'calendar', 'struct',
-                'zlib', 'gzip', 'bz2', 'lzma', 'pickle',
-                'csv', 'configparser', 'statistics',
-                'fractions', 'decimal', 'cmath'
-            }
-        else:
-            self.allowed_modules = set(allowed_modules)
-
-    def _indent_code(self, code: str, spaces: int) -> str:
-        """
-        Indent each line of code by the specified number of spaces.
-
-        Args:
-            code: The code to indent
-            spaces: Number of spaces to indent by
-
-        Returns:
-            Indented code
-        """
-        lines = code.split('\n')
-        indented_lines = []
-        for line in lines:
-            if line.strip():  # Don't indent empty lines
-                indented_lines.append(' ' * spaces + line)
-            else:
-                indented_lines.append('')
-        return '\n'.join(indented_lines)
-
-    def _create_safe_globals(self) -> Dict[str, Any]:
-        """Create a safe globals dictionary."""
-        safe_builtins = {
-            'abs', 'all', 'any', 'ascii', 'bin', 'bool', 'chr', 'dict',
-            'divmod', 'enumerate', 'filter', 'float', 'format', 'frozenset',
-            'hasattr', 'hash', 'hex', 'int', 'isinstance', 'issubclass',
-            'iter', 'len', 'list', 'map', 'max', 'min', 'oct', 'ord',
-            'pow', 'range', 'repr', 'reversed', 'round', 'set', 'slice',
-            'sorted', 'str', 'sum', 'tuple', 'type', 'vars', 'zip'
-        }
-
-        # Create restricted builtins
-        restricted_builtins = {}
-        for name in safe_builtins:
-            if hasattr(__builtins__, name):
-                restricted_builtins[name] = getattr(__builtins__, name)
-
-        # Add safe modules
-        safe_globals = {
-            '__builtins__': restricted_builtins,
-            '_print_': print,  # Controlled print function
-            '_input_': lambda prompt="": input(prompt),  # Controlled input
-        }
-
-        # Import allowed modules
-        for module_name in self.allowed_modules:
-            try:
-                safe_globals[module_name] = __import__(module_name)
-            except ImportError:
-                continue
-
-        return safe_globals
-
-    def execute(self, code: str, inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Execute code in a safe environment.
-
-        Args:
-            code: Python code to execute
-            inputs: Optional dictionary of input variables
-
-        Returns:
-            Dictionary containing execution result
-        """
-        if inputs is None:
-            inputs = {}
-
-        try:
-            # Create safe execution environment
-            safe_globals = self._create_safe_globals()
-            safe_locals = inputs.copy()
-
-            # Add a results collector
-            results = {'output': [], 'result': None, 'error': None}
-
-            # Override print to capture output
-            def safe_print(*args, **kwargs):
-                output = ' '.join(str(arg) for arg in args)
-                results['output'].append(output)
-
-            safe_globals['print'] = safe_print
-            safe_globals['_results_'] = results
-
-            # Wrap the code to capture the result
-            wrapped_code = f'''
-try:
-{self._indent_code(code, 4)}
-
-    # Try to capture the last expression result
-    if 'result' in locals():
-        _results_['result'] = result
-    elif 'answer' in locals():
-        _results_['result'] = answer
-    elif 'output' in locals():
-        _results_['result'] = output
-
-except Exception as e:
-    import traceback
-    _results_['error'] = str(e)
-    _results_['traceback'] = traceback.format_exc()
-'''
-
-            # Execute with timeout
-            start_time = time.time()
-
-            try:
-                exec(wrapped_code, safe_globals, safe_locals)
-
-                execution_time = time.time() - start_time
-
-                return {
-                    'success': results['error'] is None,
-                    'result': results['result'],
-                    'output': '\n'.join(results['output']),
-                    'error': results['error'],
-                    'execution_time': execution_time,
-                    'locals': {k: v for k, v in safe_locals.items() if not k.startswith('_')}
-                }
-
-            except Exception as e:
-                return {
-                    'success': False,
-                    'result': None,
-                    'output': '\n'.join(results['output']),
-                    'error': str(e),
-                    'execution_time': time.time() - start_time,
-                    'locals': {}
-                }
-
-        except Exception as e:
-            return {
-                'success': False,
-                'result': None,
-                'output': '',
-                'error': f'Setup error: {str(e)}',
-                'execution_time': 0,
-                'locals': {}
-            }
-
+logger = logging.getLogger(__name__)
 
 class CodeAgent:
     """
-    Agent capable of writing and executing its own code to solve puzzles.
+    Agent responsible for analyzing and executing code found in crypto puzzles.
     """
 
-    def __init__(self, llm_agent: Optional[Any] = None, tools_dir: Union[str, Path] = "generated_tools",
-                 max_execution_time: int = 30, memory_limit: int = 100 * 1024 * 1024) -> None:
+    def __init__(self, verbose=False):
         """
         Initialize the CodeAgent.
+        """
+        self.verbose = verbose
+        self.name = "CodeAgent"
+        logger.debug("CodeAgent initialized")
+
+    def run(self, state):
+        """
+        Run code analysis on the current state.
 
         Args:
-            llm_agent: LLM agent for code generation
-            tools_dir: Directory to store dynamically created tools
-            max_execution_time: Maximum execution time in seconds
-            memory_limit: Memory limit in bytes
-        """
-        self.llm_agent = llm_agent
-        self.tools_dir = Path(tools_dir)
-        self.tools_dir.mkdir(exist_ok=True)
-
-        # Initialize components
-        self.tool_registry = DynamicToolRegistry(tools_dir)
-        self.execution_env = SafeExecutionEnvironment(
-            max_execution_time=max_execution_time,
-            memory_limit=memory_limit
-        )
-
-        # Register Arweave tools if available
-        try:
-            register_arweave_tools_with_agent(self)
-        except Exception as e:
-            logging.warning(f"Failed to register Arweave tools: {e}")
-
-    def generate_code(self, task_description: str, state: Optional[Any] = None,
-                      required_outputs: Optional[List[str]] = None) -> str:
-        """
-        Generate code for a specific task.
-
-        Args:
-            task_description: Description of the task
-            state: Current puzzle state (if available)
-            required_outputs: List of required output variables
+            state: Current workflow state
 
         Returns:
-            Generated code
+            Updated state object
         """
-        if self.llm_agent and hasattr(self.llm_agent, 'llm_available') and self.llm_agent.llm_available:
-            return self._generate_with_llm(task_description, state, required_outputs)
-        else:
-            return self._generate_fallback_code(task_description, required_outputs)
-
-    def _generate_with_llm(self, task_description: str, state: Optional[Any] = None,
-                           required_outputs: Optional[List[str]] = None) -> str:
-        """Generate code using LLM."""
         try:
-            # Prepare context
-            context = f"Task: {task_description}\n"
+            if self.verbose:
+                logger.info("🔍 Running code analysis...")
 
-            if state:
-                context += f"\nPuzzle context:\n"
-                if hasattr(state, 'puzzle_text') and state.puzzle_text:
-                    context += f"Text content: {state.puzzle_text[:500]}...\n"
-                if hasattr(state, 'insights') and state.insights:
-                    recent_insights = state.insights[-3:]
-                    context += f"Recent insights: {[i.get('text', '') for i in recent_insights]}\n"
+            findings_count = 0
 
-            if required_outputs:
-                context += f"\nRequired outputs: {', '.join(required_outputs)}\n"
+            # Analyze all materials for code patterns
+            for material_id, material in state.materials.items():
+                findings_count += self._analyze_material_code(state, material)
 
-            prompt = f"""
-Generate Python code to solve this cryptographic puzzle task:
+            # Analyze existing findings for code patterns
+            findings_count += self._analyze_findings_code(state)
 
-{context}
+            logger.info(f"Code analysis completed - found {findings_count} insights")
 
-Requirements:
-1. Write clean, well-commented Python code
-2. Use only standard library modules (math, re, string, base64, hashlib, etc.)
-3. Handle errors gracefully
-4. Store results in a variable called 'result'
-5. Include print statements to show progress
-
-The code should be executable as-is and solve the specific task described.
-"""
-
-            response = self.llm_agent._send_to_llm(prompt)
-            if response:
-                # Extract code from response
-                code_blocks = re.findall(r'```python\n(.*?)\n```', response, re.DOTALL)
-                if code_blocks:
-                    return code_blocks[0]
-                else:
-                    # Try to extract code without markdown
-                    lines = response.split('\n')
-                    code_lines = []
-                    in_code = False
-                    for line in lines:
-                        if line.strip().startswith('import ') or line.strip().startswith(
-                                'def ') or line.strip().startswith('for ') or line.strip().startswith('if '):
-                            in_code = True
-                        if in_code:
-                            code_lines.append(line)
-
-                    if code_lines:
-                        return '\n'.join(code_lines)
+            return state
 
         except Exception as e:
-            logging.error(f"LLM code generation failed: {e}")
+            logger.error(f"Error in CodeAgent.run: {e}")
+            return state
 
-        # Fallback to template
-        return self._generate_fallback_code(task_description, required_outputs)
+    def _analyze_material_code(self, state, material):
+        """Analyze material content for code patterns."""
+        findings_count = 0
 
-    def _generate_fallback_code(self, task_description: str, required_outputs: Optional[List[str]] = None) -> str:
-        """
-        Generate fallback code templates for common tasks.
-
-        Args:
-            task_description: Description of the task
-            required_outputs: List of required output variables
-
-        Returns:
-            Template code
-        """
-        task_lower = task_description.lower()
-
-        if 'base64' in task_lower:
-            return self._template_base64_tool(required_outputs)
-        elif 'xor' in task_lower:
-            return self._template_xor_tool(required_outputs)
-        elif 'caesar' in task_lower:
-            return self._template_caesar_tool(required_outputs)
-        elif 'hash' in task_lower:
-            return self._template_hash_tool(required_outputs)
-        elif 'frequency' in task_lower:
-            return self._template_frequency_analysis_tool(required_outputs)
-        else:
-            return self._template_generic_analysis_tool(required_outputs)
-
-    def _template_base64_tool(self, required_outputs: Optional[List[str]] = None) -> str:
-        """Create a template for base64 encoding/decoding."""
-        return '''
-import base64
-import string
-
-def analyze_base64(text):
-    """Analyze and decode base64 strings."""
-    results = []
-
-    # Look for base64 patterns
-    import re
-    base64_pattern = r'[A-Za-z0-9+/]{8,}={0,2}'
-    matches = re.findall(base64_pattern, text)
-
-    for match in matches:
         try:
-            if len(match) % 4 == 0:  # Valid base64 length
-                decoded = base64.b64decode(match).decode('utf-8', errors='ignore')
-                if decoded.isprintable():
-                    results.append({'original': match, 'decoded': decoded})
-                    print(f"Base64 decoded: {match[:20]}... -> {decoded}")
-        except:
-            continue
+            content = material.content
 
-    return results
-
-# Example usage
-text_to_analyze = "SGVsbG8gV29ybGQ="  # Replace with actual text
-result = analyze_base64(text_to_analyze)
-print(f"Found {len(result)} base64 strings")
-'''
-
-    def _template_xor_tool(self, required_outputs: Optional[List[str]] = None) -> str:
-        """Create a template for XOR cipher."""
-        return '''
-def xor_analyze(data, key=None):
-    """Analyze XOR cipher with different keys."""
-    results = []
-
-    if isinstance(data, str):
-        data = data.encode()
-
-    if key is None:
-        # Try common single-byte keys
-        for k in range(256):
-            try:
-                decoded = ''.join(chr(b ^ k) for b in data)
-                if decoded.isprintable() and len(decoded) > 10:
-                    score = sum(1 for c in decoded.lower() if c in 'etaoinsrhdlu')
-                    results.append({'key': k, 'decoded': decoded, 'score': score})
-                    print(f"XOR key {k}: {decoded[:50]}...")
-            except:
-                continue
-
-        # Sort by score
-        results.sort(key=lambda x: x['score'], reverse=True)
-    else:
-        # Use provided key
-        if isinstance(key, str):
-            key = key.encode()
-
-        decoded = ''
-        for i, b in enumerate(data):
-            decoded += chr(b ^ key[i % len(key)])
-
-        results.append({'key': key, 'decoded': decoded, 'score': 0})
-        print(f"XOR result: {decoded}")
-
-    return results
-
-# Example usage
-data_to_analyze = b"\\x1a\\x0e\\x0c\\x0c\\x0f"  # Replace with actual data
-result = xor_analyze(data_to_analyze)
-if result:
-    print(f"Best XOR result: {result[0]['decoded']}")
-'''
-
-    def _template_caesar_tool(self, required_outputs: Optional[List[str]] = None) -> str:
-        """Create a template for Caesar cipher."""
-        return '''
-def caesar_analyze(text):
-    """Analyze Caesar cipher with all possible shifts."""
-    results = []
-
-    def caesar_shift(text, shift):
-        result = ""
-        for char in text:
-            if char.isalpha():
-                ascii_offset = 65 if char.isupper() else 97
-                shifted = (ord(char) - ascii_offset + shift) % 26
-                result += chr(shifted + ascii_offset)
+            # Convert to text for analysis
+            if isinstance(content, bytes):
+                try:
+                    text_content = content.decode('utf-8', errors='ignore')
+                except:
+                    text_content = content.decode('latin-1', errors='ignore')
             else:
-                result += char
-        return result
+                text_content = str(content)
 
-    def score_english(text):
-        # Simple English scoring based on letter frequency
-        freq = {'e': 12.7, 't': 9.1, 'a': 8.2, 'o': 7.5, 'i': 7.0, 'n': 6.7}
-        score = 0
-        for char in text.lower():
-            if char in freq:
-                score += freq[char]
-        return score
+            # Detect different programming languages
+            findings_count += self._detect_python_code(state, material, text_content)
+            findings_count += self._detect_javascript_code(state, material, text_content)
+            findings_count += self._detect_shell_code(state, material, text_content)
+            findings_count += self._detect_sql_code(state, material, text_content)
+            findings_count += self._detect_assembly_code(state, material, text_content)
 
-    for shift in range(26):
-        decoded = caesar_shift(text, shift)
-        score = score_english(decoded)
-        results.append({'shift': shift, 'decoded': decoded, 'score': score})
-        print(f"Shift {shift:2d}: {decoded[:50]}...")
+            # Look for encoded code
+            findings_count += self._detect_encoded_code(state, material, text_content)
 
-    # Sort by score
-    results.sort(key=lambda x: x['score'], reverse=True)
-    return results
+            # Analyze crypto-specific code patterns
+            findings_count += self._analyze_crypto_code_patterns(state, material, text_content)
 
-# Example usage
-text_to_analyze = "KHOOR ZRUOG"  # Replace with actual text
-result = caesar_analyze(text_to_analyze)
-if result:
-    print(f"\\nBest Caesar result (shift {result[0]['shift']}): {result[0]['decoded']}")
-'''
+        except Exception as e:
+            logger.error(f"Error analyzing material code {material.name}: {e}")
 
-    def _template_hash_tool(self, required_outputs: Optional[List[str]] = None) -> str:
-        """Create a template for hash functions."""
-        return '''
-import hashlib
+        return findings_count
 
-def hash_analyze(text):
-    """Analyze and generate various hashes."""
-    results = {}
+    def _detect_python_code(self, state, material, text):
+        """Detect and analyze Python code."""
+        findings_count = 0
 
-    # Generate common hashes
-    hash_functions = {
-        'md5': hashlib.md5,
-        'sha1': hashlib.sha1,
-        'sha256': hashlib.sha256,
-        'sha512': hashlib.sha512
-    }
+        try:
+            # Python indicators
+            python_patterns = [
+                r'import\s+\w+',
+                r'from\s+\w+\s+import',
+                r'def\s+\w+\s*\(',
+                r'class\s+\w+\s*\(',
+                r'if\s+__name__\s*==\s*["\']__main__["\']',
+                r'print\s*\(',
+                r'input\s*\(',
+            ]
 
-    for name, func in hash_functions.items():
-        hash_value = func(text.encode()).hexdigest()
-        results[name] = hash_value
-        print(f"{name.upper()}: {hash_value}")
+            python_score = 0
+            for pattern in python_patterns:
+                if re.search(pattern, text):
+                    python_score += 1
 
-    return results
+            if python_score >= 2:
+                state.add_insight(f"Python code detected in {material.name} (confidence: {python_score}/7)", "code_agent")
+                findings_count += 1
 
-def hash_crack_simple(hash_value, hash_type='md5'):
-    """Simple hash cracking with common values."""
-    import hashlib
+                # Analyze specific Python crypto patterns
+                findings_count += self._analyze_python_crypto(state, material, text)
 
-    common_values = [
-        'password', '123456', 'admin', 'root', 'flag', 'secret',
-        'hello', 'world', 'test', '', 'a', 'b', 'c', '1', '2', '3'
-    ]
+                # Try to extract and execute safe Python code
+                findings_count += self._extract_python_expressions(state, text)
 
-    hash_func = getattr(hashlib, hash_type.lower())
+        except Exception as e:
+            logger.error(f"Error detecting Python code: {e}")
 
-    for value in common_values:
-        if hash_func(value.encode()).hexdigest().lower() == hash_value.lower():
-            print(f"Hash cracked: {hash_value} = '{value}'")
-            return value
+        return findings_count
 
-    print(f"Could not crack hash: {hash_value}")
-    return None
+    def _detect_javascript_code(self, state, material, text):
+        """Detect and analyze JavaScript code."""
+        findings_count = 0
 
-# Example usage
-text_to_hash = "hello world"  # Replace with actual text
-result = hash_analyze(text_to_hash)
+        try:
+            js_patterns = [
+                r'function\s+\w+\s*\(',
+                r'var\s+\w+\s*=',
+                r'let\s+\w+\s*=',
+                r'const\s+\w+\s*=',
+                r'console\.log\s*\(',
+                r'document\.\w+',
+                r'window\.\w+',
+                r'=>',
+            ]
 
-# Try to crack a hash
-# hash_to_crack = "5d41402abc4b2a76b9719d911017c592"  # MD5 of "hello"
-# cracked = hash_crack_simple(hash_to_crack, 'md5')
-'''
+            js_score = 0
+            for pattern in js_patterns:
+                if re.search(pattern, text):
+                    js_score += 1
 
-    def _template_frequency_analysis_tool(self, required_outputs: Optional[List[str]] = None) -> str:
-        """Create a template for frequency analysis."""
-        return '''
-from collections import Counter
-import string
+            if js_score >= 2:
+                state.add_insight(f"JavaScript code detected in {material.name} (confidence: {js_score}/8)", "code_agent")
+                findings_count += 1
 
-def frequency_analysis(text):
-    """Perform frequency analysis on text."""
-    results = {}
+                # Analyze JavaScript crypto patterns
+                findings_count += self._analyze_javascript_crypto(state, material, text)
 
-    # Character frequency
-    char_freq = Counter(c.lower() for c in text if c.isalpha())
-    results['char_frequency'] = dict(char_freq.most_common())
+        except Exception as e:
+            logger.error(f"Error detecting JavaScript code: {e}")
 
-    print("Character frequencies:")
-    for char, count in char_freq.most_common(10):
-        percentage = (count / len([c for c in text if c.isalpha()])) * 100
-        print(f"  {char}: {count} ({percentage:.1f}%)")
+        return findings_count
 
-    # Word frequency
-    words = text.lower().split()
-    word_freq = Counter(words)
-    results['word_frequency'] = dict(word_freq.most_common(10))
+    def _detect_shell_code(self, state, material, text):
+        """Detect and analyze shell script code."""
+        findings_count = 0
 
-    print("\\nWord frequencies:")
-    for word, count in word_freq.most_common(5):
-        print(f"  {word}: {count}")
+        try:
+            shell_patterns = [
+                r'#!/bin/(?:bash|sh)',
+                r'echo\s+',
+                r'grep\s+',
+                r'sed\s+',
+                r'awk\s+',
+                r'curl\s+',
+                r'wget\s+',
+                r'\$\{\w+\}',
+            ]
 
-    # Bigram frequency
-    bigrams = [text[i:i+2].lower() for i in range(len(text)-1) if text[i:i+2].isalpha()]
-    bigram_freq = Counter(bigrams)
-    results['bigram_frequency'] = dict(bigram_freq.most_common(10))
+            shell_score = 0
+            for pattern in shell_patterns:
+                if re.search(pattern, text):
+                    shell_score += 1
 
-    print("\\nBigram frequencies:")
-    for bigram, count in bigram_freq.most_common(5):
-        print(f"  {bigram}: {count}")
+            if shell_score >= 2:
+                state.add_insight(f"Shell script detected in {material.name} (confidence: {shell_score}/8)", "code_agent")
+                findings_count += 1
 
-    return results
+                # Look for crypto-related shell commands
+                crypto_commands = re.findall(r'(openssl|gpg|sha256sum|md5sum|bitcoin-cli)\s+[^\n]+', text)
+                if crypto_commands:
+                    state.add_insight(f"Found {len(crypto_commands)} crypto shell commands", "code_agent")
+                    findings_count += 1
+                    for cmd in crypto_commands[:3]:
+                        state.add_insight(f"Crypto command: {cmd[:50]}...", "code_agent")
+                        findings_count += 1
 
-# Example usage
-text_to_analyze = "The quick brown fox jumps over the lazy dog"  # Replace with actual text
-result = frequency_analysis(text_to_analyze)
-'''
+        except Exception as e:
+            logger.error(f"Error detecting shell code: {e}")
 
-    def _template_generic_analysis_tool(self, required_outputs: Optional[List[str]] = None) -> str:
-        """Create a template for generic text analysis."""
-        return '''
-import re
-import string
+        return findings_count
 
-def generic_analysis(text):
-    """Perform generic analysis on text or data."""
-    results = {}
+    def _detect_sql_code(self, state, material, text):
+        """Detect SQL code that might contain crypto data."""
+        findings_count = 0
 
-    print(f"Analyzing text of length: {len(text)}")
+        try:
+            sql_patterns = [
+                r'SELECT\s+.*FROM',
+                r'INSERT\s+INTO',
+                r'UPDATE\s+.*SET',
+                r'CREATE\s+TABLE',
+                r'DROP\s+TABLE',
+            ]
 
-    # Basic statistics
-    results['length'] = len(text)
-    results['unique_chars'] = len(set(text))
-    results['printable_ratio'] = sum(1 for c in text if c in string.printable) / len(text)
+            sql_score = 0
+            for pattern in sql_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    sql_score += 1
 
-    print(f"Unique characters: {results['unique_chars']}")
-    print(f"Printable ratio: {results['printable_ratio']:.2f}")
+            if sql_score >= 1:
+                state.add_insight(f"SQL code detected in {material.name}", "code_agent")
+                findings_count += 1
 
-    # Look for patterns
-    patterns = {
-        'hex_strings': r'[0-9a-fA-F]{8,}',
-        'base64_like': r'[A-Za-z0-9+/]{8,}={0,2}',
-        'email_addresses': r'\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b',
-        'urls': r'https?://[^\\s]+',
-        'numbers': r'\\b\\d+\\b'
-    }
+                # Look for crypto-related table/column names
+                crypto_sql_terms = ['wallet', 'address', 'private_key', 'public_key', 'hash', 'signature']
+                found_terms = [term for term in crypto_sql_terms if term in text.lower()]
+                if found_terms:
+                    state.add_insight(f"SQL contains crypto terms: {', '.join(found_terms)}", "code_agent")
+                    findings_count += 1
 
-    for pattern_name, pattern in patterns.items():
-        matches = re.findall(pattern, text)
-        if matches:
-            results[pattern_name] = matches
-            print(f"Found {len(matches)} {pattern_name}: {matches[:3]}...")
+        except Exception as e:
+            logger.error(f"Error detecting SQL code: {e}")
 
-    # Character distribution
-    char_types = {
-        'letters': sum(1 for c in text if c.isalpha()),
-        'digits': sum(1 for c in text if c.isdigit()),
-        'spaces': sum(1 for c in text if c.isspace()),
-        'punctuation': sum(1 for c in text if c in string.punctuation)
-    }
+        return findings_count
 
-    print("\\nCharacter distribution:")
-    for char_type, count in char_types.items():
-        print(f"  {char_type}: {count}")
+    def _detect_assembly_code(self, state, material, text):
+        """Detect assembly code that might be relevant."""
+        findings_count = 0
 
-    results['char_distribution'] = char_types
+        try:
+            asm_patterns = [
+                r'\b(mov|add|sub|mul|div|jmp|call|ret|push|pop)\s+',
+                r'\b(eax|ebx|ecx|edx|rax|rbx|rcx|rdx)\b',
+                r'\.section\s+',
+                r'\.global\s+',
+            ]
 
-    return results
+            asm_score = 0
+            for pattern in asm_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    asm_score += 1
 
-# Example usage
-text_to_analyze = "Sample text to analyze"  # Replace with actual text
-result = generic_analysis(text_to_analyze)
-'''
+            if asm_score >= 2:
+                state.add_insight(f"Assembly code detected in {material.name}", "code_agent")
+                findings_count += 1
 
-    def execute_code(self, code: str, inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        except Exception as e:
+            logger.error(f"Error detecting assembly code: {e}")
+
+        return findings_count
+
+    def _detect_encoded_code(self, state, material, text):
+        """Detect base64 or hex encoded code."""
+        findings_count = 0
+
+        try:
+            # Look for base64 encoded content that might be code
+            base64_pattern = r'[A-Za-z0-9+/]{50,}={0,2}'
+            base64_matches = re.findall(base64_pattern, text)
+
+            for match in base64_matches:
+                try:
+                    decoded = base64.b64decode(match)
+                    decoded_text = decoded.decode('utf-8', errors='ignore')
+
+                    # Check if decoded content looks like code
+                    if self._looks_like_code(decoded_text):
+                        state.add_insight(f"Base64 encoded code found: {decoded_text[:50]}...", "code_agent")
+                        findings_count += 1
+
+                        # Recursively analyze the decoded code
+                        findings_count += self._analyze_material_code(state, type('obj', (object,), {
+                            'name': f"{material.name}_decoded",
+                            'content': decoded_text
+                        })())
+
+                except:
+                    pass  # Not valid base64 or not text
+
+            # Look for hex encoded content
+            hex_pattern = r'\b[0-9a-fA-F]{40,}\b'
+            hex_matches = re.findall(hex_pattern, text)
+
+            for match in hex_matches:
+                try:
+                    if len(match) % 2 == 0:  # Even length for valid hex
+                        decoded = bytes.fromhex(match)
+                        decoded_text = decoded.decode('utf-8', errors='ignore')
+
+                        if self._looks_like_code(decoded_text):
+                            state.add_insight(f"Hex encoded code found: {decoded_text[:50]}...", "code_agent")
+                            findings_count += 1
+
+                except:
+                    pass  # Not valid hex or not text
+
+        except Exception as e:
+            logger.error(f"Error detecting encoded code: {e}")
+
+        return findings_count
+
+    def _analyze_python_crypto(self, state, material, text):
+        """Analyze Python code for crypto operations."""
+        findings_count = 0
+
+        try:
+            # Look for crypto library imports
+            crypto_imports = re.findall(r'import\s+(hashlib|cryptography|Crypto|ecdsa|bitcoin|web3|eth_account)', text)
+            if crypto_imports:
+                state.add_insight(f"Python imports crypto libraries: {', '.join(crypto_imports)}", "code_agent")
+                findings_count += 1
+
+            # Look for hash operations
+            hash_operations = re.findall(r'(sha256|md5|blake2b|keccak)\s*\([^)]*\)', text)
+            if hash_operations:
+                state.add_insight(f"Python performs hash operations: {len(hash_operations)} found", "code_agent")
+                findings_count += 1
+
+            # Look for key generation
+            if re.search(r'generate.*key|new.*key|create.*key', text, re.IGNORECASE):
+                state.add_insight("Python code generates cryptographic keys", "code_agent")
+                findings_count += 1
+
+            # Look for Bitcoin/Ethereum specific operations
+            if re.search(r'bitcoin|btc|satoshi', text, re.IGNORECASE):
+                state.add_insight("Python code contains Bitcoin-related operations", "code_agent")
+                findings_count += 1
+
+            if re.search(r'ethereum|eth|wei|gwei', text, re.IGNORECASE):
+                state.add_insight("Python code contains Ethereum-related operations", "code_agent")
+                findings_count += 1
+
+        except Exception as e:
+            logger.error(f"Error analyzing Python crypto: {e}")
+
+        return findings_count
+
+    def _analyze_javascript_crypto(self, state, material, text):
+        """Analyze JavaScript code for crypto operations."""
+        findings_count = 0
+
+        try:
+            # Look for crypto libraries
+            if re.search(r'crypto-js|bitcoinjs|web3|ethers', text, re.IGNORECASE):
+                state.add_insight("JavaScript uses crypto libraries", "code_agent")
+                findings_count += 1
+
+            # Look for browser crypto API usage
+            if re.search(r'crypto\.subtle|window\.crypto', text):
+                state.add_insight("JavaScript uses Web Crypto API", "code_agent")
+                findings_count += 1
+
+            # Look for base64 operations
+            if re.search(r'btoa\(|atob\(', text):
+                state.add_insight("JavaScript performs base64 encoding/decoding", "code_agent")
+                findings_count += 1
+
+        except Exception as e:
+            logger.error(f"Error analyzing JavaScript crypto: {e}")
+
+        return findings_count
+
+    def _analyze_crypto_code_patterns(self, state, material, text):
+        """Analyze general crypto-related code patterns."""
+        findings_count = 0
+
+        try:
+            # Look for common crypto constants
+            crypto_constants = [
+                r'0x[a-fA-F0-9]{64}',  # 256-bit hex values
+                r'[a-fA-F0-9]{64}',    # 64 character hex strings
+                r'secp256k1',          # Elliptic curve
+                r'P-256|P-384|P-521',  # NIST curves
+            ]
+
+            for pattern in crypto_constants:
+                matches = re.findall(pattern, text)
+                if matches:
+                    state.add_insight(f"Found {len(matches)} crypto constants matching {pattern}", "code_agent")
+                    findings_count += 1
+
+            # Look for wallet-related code patterns
+            wallet_patterns = [
+                r'private.*key',
+                r'public.*key',
+                r'mnemonic.*phrase',
+                r'seed.*phrase',
+                r'derivation.*path',
+                r'address.*generation',
+            ]
+
+            for pattern in wallet_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    state.add_insight(f"Code contains wallet-related pattern: {pattern}", "code_agent")
+                    findings_count += 1
+
+            # Look for encoding/decoding operations
+            encoding_patterns = [
+                r'base58|base64|hex|binary',
+                r'encode|decode',
+                r'serialize|deserialize',
+            ]
+
+            encoding_matches = 0
+            for pattern in encoding_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    encoding_matches += 1
+
+            if encoding_matches >= 2:
+                state.add_insight("Code performs multiple encoding/decoding operations", "code_agent")
+                findings_count += 1
+
+        except Exception as e:
+            logger.error(f"Error analyzing crypto code patterns: {e}")
+
+        return findings_count
+
+    def _extract_python_expressions(self, state, text):
+        """Extract and safely evaluate simple Python expressions."""
+        findings_count = 0
+
+        try:
+            # Look for simple print statements with string literals
+            print_pattern = r'print\s*\(\s*["\']([^"\']+)["\']\s*\)'
+            print_matches = re.findall(print_pattern, text)
+
+            for match in print_matches:
+                state.add_insight(f"Python print output: {match}", "code_agent")
+                findings_count += 1
+
+            # Look for simple variable assignments with string/number values
+            assignment_pattern = r'(\w+)\s*=\s*["\']([^"\']+)["\']'
+            assignments = re.findall(assignment_pattern, text)
+
+            for var_name, value in assignments:
+                if len(value) > 10 and any(char.isalnum() for char in value):
+                    state.add_insight(f"Python variable {var_name} = {value[:30]}...", "code_agent")
+                    findings_count += 1
+
+            # Look for hex/int conversions
+            hex_pattern = r'int\s*\(\s*["\']([a-fA-F0-9]+)["\']\s*,\s*16\s*\)'
+            hex_matches = re.findall(hex_pattern, text)
+
+            for hex_val in hex_matches:
+                try:
+                    decimal_val = int(hex_val, 16)
+                    state.add_insight(f"Hex conversion: {hex_val} = {decimal_val}", "code_agent")
+                    findings_count += 1
+                except:
+                    pass
+
+        except Exception as e:
+            logger.error(f"Error extracting Python expressions: {e}")
+
+        return findings_count
+
+    def _analyze_findings_code(self, state):
+        """Analyze existing findings for code patterns."""
+        findings_count = 0
+
+        try:
+            for finding in state.findings:
+                text = finding.description
+
+                # Check if finding mentions code-related terms
+                code_keywords = ['code', 'script', 'function', 'program', 'execute', 'compile']
+                if any(keyword in text.lower() for keyword in code_keywords):
+                    # Re-analyze this finding as potential code
+                    if self._looks_like_code(text):
+                        state.add_insight(f"Finding contains code-like content: {finding.title}", "code_agent")
+                        findings_count += 1
+
+                        # Create a temporary material to analyze the code
+                        temp_material = type('obj', (object,), {
+                            'name': f"finding_{finding.id}",
+                            'content': text
+                        })()
+
+                        findings_count += self._analyze_material_code(state, temp_material)
+
+        except Exception as e:
+            logger.error(f"Error analyzing findings for code: {e}")
+
+        return findings_count
+
+    def _looks_like_code(self, text):
+        """Determine if text looks like code."""
+        try:
+            code_indicators = [
+                r'[{}()\[\];]',           # Common code punctuation
+                r'=\s*["\']',             # String assignments
+                r'if\s*\(',               # Conditional statements
+                r'for\s*\(',              # Loops
+                r'function\s*\(',         # Function definitions
+                r'def\s+\w+\s*\(',        # Python functions
+                r'import\s+\w+',          # Imports
+                r'#include\s*<',          # C includes
+                r'//.*$',                 # C-style comments
+                r'#.*$',                  # Script comments
+            ]
+
+            score = 0
+            for pattern in code_indicators:
+                if re.search(pattern, text, re.MULTILINE):
+                    score += 1
+
+            # Also check for high concentration of special characters
+            special_chars = sum(1 for c in text if c in '{}()[];=<>+-*/&|^%!')
+            if len(text) > 0:
+                special_ratio = special_chars / len(text)
+                if special_ratio > 0.05:  # More than 5% special characters
+                    score += 1
+
+            return score >= 2
+
+        except Exception as e:
+            logger.error(f"Error checking if text looks like code: {e}")
+            return False
+
+    def analyze_code_snippet(self, code_snippet, language=None):
         """
-        Execute the generated code safely.
+        Analyze a specific code snippet.
 
         Args:
-            code: Python code to execute
-            inputs: Optional dictionary of input variables
+            code_snippet: String containing code to analyze
+            language: Optional language hint (python, javascript, etc.)
 
         Returns:
-            Execution results
+            Dictionary with analysis results
         """
-        return self.execution_env.execute(code, inputs)
+        try:
+            result = {
+                'language': language or 'unknown',
+                'lines': len(code_snippet.split('\n')),
+                'contains_crypto': self._check_crypto_patterns(code_snippet),
+                'insights': []
+            }
 
-    def register_new_tool(self, task_description: str, state: Optional[Any] = None) -> Optional[str]:
+            # Detect language if not provided
+            if language is None:
+                if self._looks_like_python(code_snippet):
+                    result['language'] = 'python'
+                elif self._looks_like_javascript(code_snippet):
+                    result['language'] = 'javascript'
+                elif self._looks_like_shell(code_snippet):
+                    result['language'] = 'shell'
+
+            # Add specific insights based on language
+            if result['language'] == 'python':
+                result['insights'].extend(self._get_python_insights(code_snippet))
+            elif result['language'] == 'javascript':
+                result['insights'].extend(self._get_javascript_insights(code_snippet))
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error analyzing code snippet: {e}")
+            return {'error': str(e)}
+
+    def _check_crypto_patterns(self, code):
         """
-        Generate and register a new tool based on the task description.
+        Check if code contains cryptographic patterns.
 
         Args:
-            task_description: Description of the tool to create
-            state: Current puzzle state (if available)
+            code: Code string to analyze
 
         Returns:
-            Tool ID if successful, None otherwise
+            Boolean indicating if crypto patterns were found
         """
-        code = self.generate_code(task_description, state)
-        if code:
-            return self.tool_registry.register_tool(code, description=task_description)
-        return None
-
-    def use_tool(self, tool_id: str, inputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Use a registered tool.
-
-        Args:
-            tool_id: ID of the tool to use
-            inputs: Input parameters for the tool
-
-        Returns:
-            Tool execution results
-        """
-        tool = self.tool_registry.get_tool(tool_id)
-        if tool:
-            try:
-                result = tool(inputs)
-                return {'success': True, 'result': result}
-            except Exception as e:
-                return {'success': False, 'error': str(e)}
-        else:
-            return {'success': False, 'error': f'Tool {tool_id} not found'}
-
-    def analyze_and_create_tools(self, state: Any) -> List[str]:
-        """
-        Analyze the puzzle state and create appropriate tools.
-
-        Args:
-            state: Current puzzle state
-
-        Returns:
-            List of created tool IDs
-        """
-        created_tools = []
-
-        # Check for Arweave puzzle patterns
-        if self._check_for_arweave_patterns(state):
-            arweave_tools = self._create_arweave_tools(state)
-            created_tools.extend(arweave_tools)
-
-        # Create default tools based on puzzle content
-        default_tools = self._create_default_tools()
-        created_tools.extend(default_tools)
-
-        return created_tools
-
-    def _check_for_arweave_patterns(self, state: Any) -> bool:
-        """
-        Check if the puzzle state contains Arweave puzzle patterns.
-
-        Args:
-            state: Current puzzle state
-
-        Returns:
-            True if Arweave puzzle patterns are detected, False otherwise
-        """
-        indicators = [
-            'arweave', 'puzzle weave', 'tx_id', 'transaction',
-            'gateway', 'permaweb', 'blockchain', 'weave'
+        crypto_keywords = [
+            'encrypt', 'decrypt', 'hash', 'sha256', 'md5',
+            'aes', 'rsa', 'base64', 'cipher', 'crypto',
+            'bitcoin', 'wallet', 'private_key', 'public_key',
+            'ecdsa', 'secp256k1', 'mnemonic', 'seed'
         ]
 
-        content = ""
-        if hasattr(state, 'puzzle_text') and state.puzzle_text:
-            content += state.puzzle_text.lower()
+        code_lower = code.lower()
+        return any(keyword in code_lower for keyword in crypto_keywords)
 
-        if hasattr(state, 'insights'):
-            for insight in state.insights:
-                content += insight.get('text', '').lower()
+    def _looks_like_python(self, text):
+        """Check if text looks like Python code."""
+        python_keywords = ['import', 'def ', 'class ', 'if __name__', 'print(']
+        return any(keyword in text for keyword in python_keywords)
 
-        return any(indicator in content for indicator in indicators)
+    def _looks_like_javascript(self, text):
+        """Check if text looks like JavaScript code."""
+        js_keywords = ['function', 'var ', 'let ', 'const ', 'console.log']
+        return any(keyword in text for keyword in js_keywords)
 
-    def _create_arweave_tools(self, state: Any) -> List[str]:
-        """
-        Create specialized tools for Arweave puzzles.
+    def _looks_like_shell(self, text):
+        """Check if text looks like shell script."""
+        shell_keywords = ['#!/bin/', 'echo ', 'grep ', 'curl ']
+        return any(keyword in text for keyword in shell_keywords)
 
-        Args:
-            state: Current puzzle state
+    def _get_python_insights(self, code):
+        """Get Python-specific insights."""
+        insights = []
 
-        Returns:
-            List of created tool IDs
-        """
-        created_tools = []
+        if 'hashlib' in code:
+            insights.append("Uses Python hashlib for cryptographic hashing")
+        if 'base64' in code:
+            insights.append("Performs base64 encoding/decoding")
+        if 'bitcoin' in code.lower():
+            insights.append("Contains Bitcoin-related operations")
 
-        # Transaction fetcher tool
-        tx_tool_code = '''
-def fetch_arweave_transaction(tx_id, gateway="https://arweave.net"):
-    """Fetch Arweave transaction data."""
-    import requests
-    import json
+        return insights
 
-    try:
-        # Fetch transaction data
-        url = f"{gateway}/tx/{tx_id}"
-        response = requests.get(url, timeout=10)
+    def _get_javascript_insights(self, code):
+        """Get JavaScript-specific insights."""
+        insights = []
 
-        if response.status_code == 200:
-            tx_data = response.json()
-            print(f"Transaction {tx_id} found")
-            print(f"Data size: {tx_data.get('data_size', 'unknown')}")
+        if 'crypto' in code.lower():
+            insights.append("Uses JavaScript crypto operations")
+        if 'btoa(' in code or 'atob(' in code:
+            insights.append("Performs base64 encoding/decoding")
 
-            # Try to fetch actual data
-            data_url = f"{gateway}/{tx_id}"
-            data_response = requests.get(data_url, timeout=10)
-
-            if data_response.status_code == 200:
-                return {
-                    'transaction': tx_data,
-                    'data': data_response.text,
-                    'binary_data': data_response.content
-                }
-
-        return {'error': f'Failed to fetch transaction {tx_id}'}
-
-    except Exception as e:
-        return {'error': str(e)}
-
-result = fetch_arweave_transaction("example_tx_id")
-'''
-
-        tool_id = self.tool_registry.register_tool(
-            tx_tool_code,
-            "arweave_fetcher",
-            "Fetch Arweave transaction data"
-        )
-        if tool_id:
-            created_tools.append(tool_id)
-
-        return created_tools
-
-    def _create_default_tools(self) -> List[str]:
-        """Create a set of default tools for cryptographic puzzles."""
-        created_tools = []
-
-        # Base64 analyzer
-        base64_tool = self.tool_registry.register_tool(
-            self._template_base64_tool(),
-            "base64_analyzer",
-            "Analyze and decode base64 strings"
-        )
-        if base64_tool:
-            created_tools.append(base64_tool)
-
-        # XOR analyzer
-        xor_tool = self.tool_registry.register_tool(
-            self._template_xor_tool(),
-            "xor_analyzer",
-            "Analyze XOR cipher with various keys"
-        )
-        if xor_tool:
-            created_tools.append(xor_tool)
-
-        return created_tools
-
-    def integrate_with_state(self, state: Any, analyze_puzzle: bool = True) -> Any:
-        """
-        Integrate code analysis with the puzzle state.
-
-        Args:
-            state: Current puzzle state
-            analyze_puzzle: Whether to analyze the puzzle and create tools
-
-        Returns:
-            Updated state
-        """
-        try:
-            if analyze_puzzle:
-                # Create tools based on puzzle analysis
-                created_tools = self.analyze_and_create_tools(state)
-
-                if created_tools:
-                    state.add_insight(
-                        f"Created {len(created_tools)} code analysis tools: {', '.join(created_tools)}",
-                        "code_agent"
-                    )
-
-            # Add available tools information
-            available_tools = self.tool_registry.list_tools()
-            if available_tools:
-                state.add_insight(
-                    f"Available code tools: {len(available_tools)} tools ready for execution",
-                    "code_agent"
-                )
-
-            return state
-
-        except Exception as e:
-            logging.error(f"Code agent integration failed: {e}")
-            state.add_insight(f"Code analysis encountered an error: {str(e)}", "code_agent")
-            return state
+        return insights
