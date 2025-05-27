@@ -6,7 +6,7 @@ Integrates the VisionAgent into the analysis flow.
 import logging
 from typing import Dict, Any, Optional, List
 from core.state import State
-from core.vision_agent import VisionAgent
+from agents.vision_agent import VisionAgent
 from analyzers.base import register_analyzer, analyzer_compatibility
 from analyzers.image_analyzer import analyze_image_with_opencv
 
