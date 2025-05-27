@@ -22,7 +22,7 @@ from enhanced_state_management import WorkflowState, AnalysisPhase, TaskStatus, 
 
 
 class AnalysisDashboard:
-    """Real-time dashboard for workflow analysis"""
+    """Real-time dashboard.css for workflow analysis"""
     
     def __init__(self, orchestrator):
         self.orchestrator = orchestrator
@@ -38,7 +38,7 @@ class AnalysisDashboard:
         self.task_timeline = []
     
     def create_layout(self) -> Layout:
-        """Create dashboard layout"""
+        """Create dashboard.css layout"""
         layout = Layout()
         
         layout.split_column(
@@ -65,7 +65,7 @@ class AnalysisDashboard:
         return layout
     
     def generate_header(self) -> Panel:
-        """Generate dashboard header"""
+        """Generate dashboard.css header"""
         state = self.orchestrator.state
         progress = state.get_progress_summary()
         
@@ -210,7 +210,7 @@ class AnalysisDashboard:
         return Panel(table, box=box.ROUNDED)
     
     def generate_footer(self) -> Panel:
-        """Generate dashboard footer"""
+        """Generate dashboard.css footer"""
         state = self.orchestrator.state
         
         # Performance stats
@@ -229,7 +229,7 @@ class AnalysisDashboard:
         return Panel(footer_text, style="dim", box=box.SIMPLE)
     
     def display_static_dashboard(self):
-        """Display static dashboard (for non-live mode)"""
+        """Display static dashboard.css (for non-live mode)"""
         layout = self.create_layout()
         
         layout["header"].update(self.generate_header())
@@ -242,7 +242,7 @@ class AnalysisDashboard:
         self.console.print(layout)
     
     def run_live_dashboard(self):
-        """Run live updating dashboard"""
+        """Run live updating dashboard.css"""
         def generate_layout():
             layout = self.create_layout()
             
@@ -337,7 +337,7 @@ class AnalysisDashboard:
         return "\n".join(summary_lines)
     
     def export_dashboard_data(self, output_file: str):
-        """Export dashboard data to JSON"""
+        """Export dashboard.css data to JSON"""
         state = self.orchestrator.state
         
         dashboard_data = {
